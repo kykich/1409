@@ -878,6 +878,28 @@ body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--text); overflow:
 .branch-row.active { background: #eef1ff; border-color: var(--accent); }
 .branch-row .b-name { flex: 1 1 auto; font-weight: 700; color: #2b3350; }
 .branch-row .b-size { color: #8a92a6; font-size: .64rem; }
+.branch-row .b-ren {
+    border: none;
+    background: transparent;
+    color: #5a6a8c;
+    cursor: pointer;
+    font-size: .8rem;
+    line-height: 1;
+    padding: 0 3px;
+}
+.branch-row .b-ren:hover { color: var(--accent); }
+.branch-row .b-name-edit {
+    flex: 1 1 auto;
+    min-width: 0;
+    font: inherit;
+    font-size: .72rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    border: 1px solid var(--accent);
+    border-radius: 5px;
+    background: #fff;
+    color: #2b3350;
+}
 .branch-row .b-del {
     border: none;
     background: transparent;

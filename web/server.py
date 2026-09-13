@@ -31,7 +31,8 @@ JSON-API:
     POST /api/strategy      - {strategy, window} -> стратегия контекста
                               (none / sliding / facts / branch)
     POST /api/facts         - {facts:{ключ:значение}} -> сохранить блок facts
-    POST /api/branches      - {action:"create"|"switch"|"delete", …} -> ветки
+    POST /api/branches      - {action:"create"|"switch"|"delete"|"rename", …}
+                              -> ветки (rename: {index, name})
 """
 import json
 import mimetypes
@@ -438,10 +439,11 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_branches(self):
-        """Управление ветками: create / switch / delete.
+        """Управление ветками: create / switch / delete / rename.
 
-        Ожидаемые поля: action = "create" | "switch" | "delete",
-        name (для create), count (для create), index (для switch/delete).
+        Ожидаемые поля: action = "create" | "switch" | "delete" | "rename",
+        name (для create/rename), count (для create),
+        index (для switch/delete/rename).
         """
         data = self._read_json_body()
         if not data:
@@ -456,6 +458,9 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             state = self.session.switch_branch(data.get("index"))
         elif action == "delete":
             state = self.session.delete_branch(data.get("index"))
+        elif action == "rename":
+            state = self.session.rename_branch(data.get("index"),
+                                               data.get("name"))
         else:
             return self._send_json(400, {
                 "ok": False,

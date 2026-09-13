@@ -536,3 +536,24 @@ class SessionStore:
             self.messages = list(self.branches[self.active_branch]["messages"])
             self._save_locked()
             return self.branches_state()
+
+    def rename_branch(self, index, name):
+        """Переименовывает ветку по индексу и сохраняет на диск.
+
+        Пустое имя или имя из пробелов игнорируется. Возвращает состояние
+        веток после операции.
+        """
+        with self.lock:
+            try:
+                idx = int(index)
+            except (TypeError, ValueError):
+                return self.branches_state()
+            new_name = str(name if name is not None else "").strip()
+            # Обрезаем чрезмерно длинные имена, чтобы не ломать интерфейс.
+            if len(new_name) > 80:
+                new_name = new_name[:80]
+            if not new_name or not (0 <= idx < len(self.branches)):
+                return self.branches_state()
+            self.branches[idx]["name"] = new_name
+            self._save_locked()
+            return self.branches_state()

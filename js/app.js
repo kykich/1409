@@ -546,14 +546,34 @@
         state.branches.forEach(function (b, i) {
             var row = document.createElement("div");
             row.className = "branch-row" + (i === active ? " active" : "");
+            row.title = "Клик — переключиться; двойной клик по имени — переименовать";
+
             var name = document.createElement("span");
             name.className = "b-name";
             name.textContent = b.name;
+            name.title = "Двойной клик — переименовать ветку";
+            // Двойной клик по имени — редактирование «на месте».
+            name.addEventListener("dblclick", function (e) {
+                e.stopPropagation();
+                startRenameBranch(row, name, i, b.name);
+            });
+            row.appendChild(name);
+
             var size = document.createElement("span");
             size.className = "b-size";
             size.textContent = b.size + " сообщ.";
-            row.appendChild(name);
             row.appendChild(size);
+
+            // Кнопка переименования (карандаш).
+            var ren = document.createElement("button");
+            ren.type = "button"; ren.className = "b-ren"; ren.textContent = "\u270e";
+            ren.title = "Переименовать ветку";
+            ren.addEventListener("click", function (e) {
+                e.stopPropagation();
+                startRenameBranch(row, name, i, b.name);
+            });
+            row.appendChild(ren);
+
             if (state.branches.length > 1) {
                 var del = document.createElement("button");
                 del.type = "button"; del.className = "b-del"; del.textContent = "\u00d7";
@@ -586,6 +606,50 @@
         branchesBox.appendChild(actions);
     }
 
+    // Запускает inline-редактирование имени ветки прямо в строке.
+    function startRenameBranch(row, nameEl, index, currentName) {
+        if (row.querySelector(".b-name-edit")) return;   // уже редактируется
+        nameEl.style.display = "none";
+
+        var inp = document.createElement("input");
+        inp.type = "text";
+        inp.className = "b-name-edit";
+        inp.value = currentName || "";
+        inp.maxLength = 80;
+        row.insertBefore(inp, nameEl);
+        inp.focus();
+        inp.select();
+
+        var finished = false;
+        function commit() {
+            if (finished) return;
+            finished = true;
+            var newName = inp.value.trim();
+            inp.remove();
+            nameEl.style.display = "";
+            if (newName && newName !== currentName) {
+                branchAction({ action: "rename", index: index, name: newName });
+            } else {
+                nameEl.textContent = currentName;   // без изменений
+            }
+        }
+        function cancel() {
+            if (finished) return;
+            finished = true;
+            inp.remove();
+            nameEl.style.display = "";
+            nameEl.textContent = currentName;
+        }
+
+        inp.addEventListener("click", function (e) { e.stopPropagation(); });
+        inp.addEventListener("dblclick", function (e) { e.stopPropagation(); });
+        inp.addEventListener("keydown", function (e) {
+            if (e.key === "Enter") { e.preventDefault(); commit(); }
+            else if (e.key === "Escape") { e.preventDefault(); cancel(); }
+        });
+        inp.addEventListener("blur", commit);
+    }
+
     function branchAction(payload) {
         fetch("/api/branches", {
             method: "POST",
@@ -596,8 +660,9 @@
         .then(function (d) {
             if (!d || !d.ok) return;
             renderBranches(d.branches);
-            // Обновляем окно чата из серверной истории (ветка переключена).
-            if (Array.isArray(d.messages)) {
+            // Переименование историю не меняет. Create/switch/delete могут
+            // сменить активную ветку — тогда обновляем окно из серверных данных.
+            if (payload.action !== "rename" && Array.isArray(d.messages)) {
                 items = d.messages.slice();
                 render();
             }
