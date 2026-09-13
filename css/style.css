@@ -721,4 +721,195 @@ body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--text); overflow:
     opacity: .5;
 }
 
+/* ===== Стратегия управления контекстом ===== */
+.strategy-bar {
+    align-items: center;
+}
+.strategy-label {
+    font-weight: 700;
+    font-size: .82rem;
+    color: #1a1a2e;
+}
+.strategy-group {
+    display: inline-flex;
+    gap: 4px;
+}
+.strat-btn {
+    font: inherit;
+    font-size: .76rem;
+    font-weight: 700;
+    padding: 4px 12px;
+    border: 1px solid #cdd4e6;
+    border-radius: 16px;
+    background: #f7f8fc;
+    color: #3a4560;
+    cursor: pointer;
+}
+.strat-btn:hover { background: #eef1ff; }
+.strat-btn.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* ===== Поле ввода внизу чата (вариант A) ===== */
+.composer {
+    flex-shrink: 0;
+    background: #fff;
+    border-top: 1px solid #e3e7f2;
+    padding: 10px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.composer-inner {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    max-width: 900px;
+    width: 100%;
+    margin: 0 auto;
+}
+.composer .composer-input {
+    flex: 1 1 auto;
+    min-height: 38px;
+    max-height: 180px;
+    resize: vertical;
+    background: #f4f6fc;
+    color: #223;
+    border: 1px solid #cdd4e6;
+    border-radius: 10px;
+    padding: 9px 12px;
+    font-size: .9rem;
+}
+.composer .composer-input::placeholder { color: #9aa2bd; }
+.composer .composer-input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.composer .composer-send {
+    width: auto;
+    padding: 10px 22px;
+    border-radius: 10px;
+    flex: 0 0 auto;
+}
+.composer-status {
+    max-width: 900px;
+    width: 100%;
+    margin: 0 auto;
+}
+
+/* ===== Панель Facts (key-value) ===== */
+.panel-title-sub {
+    background: #3a4568;
+    font-size: .72rem;
+    border-top: 1px solid #26304a;
+}
+.facts-box {
+    padding: 8px 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.facts-empty, .branches-empty {
+    font-size: .72rem;
+    color: #7d879c;
+    font-style: italic;
+}
+.fact-row {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+.fact-row input {
+    font: inherit;
+    font-size: .72rem;
+    padding: 3px 6px;
+    border: 1px solid #cdd4e6;
+    border-radius: 5px;
+    background: #fff;
+    color: #223;
+    min-width: 0;
+}
+.fact-row .fact-key { flex: 0 0 34%; font-weight: 700; }
+.fact-row .fact-val { flex: 1 1 auto; }
+.fact-row .fact-del {
+    flex: 0 0 auto;
+    border: none;
+    background: transparent;
+    color: #b02a37;
+    cursor: pointer;
+    font-size: .9rem;
+    line-height: 1;
+    padding: 0 3px;
+}
+.facts-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 2px;
+}
+.facts-actions button {
+    font: inherit;
+    font-size: .7rem;
+    padding: 4px 8px;
+    border: 1px solid #cdd4e6;
+    border-radius: 6px;
+    background: #f7f8fc;
+    cursor: pointer;
+}
+.facts-actions button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* ===== Панель веток диалога ===== */
+.branches-box {
+    padding: 8px 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+.branch-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: .72rem;
+    padding: 4px 7px;
+    border-radius: 6px;
+    background: #f7f8fc;
+    border: 1px solid #e3e7f2;
+    cursor: pointer;
+}
+.branch-row.active { background: #eef1ff; border-color: var(--accent); }
+.branch-row .b-name { flex: 1 1 auto; font-weight: 700; color: #2b3350; }
+.branch-row .b-size { color: #8a92a6; font-size: .64rem; }
+.branch-row .b-del {
+    border: none;
+    background: transparent;
+    color: #b02a37;
+    cursor: pointer;
+    font-size: .85rem;
+    line-height: 1;
+}
+.branches-actions {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-top: 3px;
+    flex-wrap: wrap;
+}
+.branches-actions input {
+    width: 50px;
+    font: inherit;
+    font-size: .72rem;
+    padding: 3px 6px;
+    border: 1px solid #cdd4e6;
+    border-radius: 5px;
+}
+.branches-actions button {
+    font: inherit;
+    font-size: .7rem;
+    padding: 4px 8px;
+    border: 1px solid #cdd4e6;
+    border-radius: 6px;
+    background: #f7f8fc;
+    cursor: pointer;
+}
+.branches-actions button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+
 

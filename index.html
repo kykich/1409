@@ -23,10 +23,6 @@
 
         <!-- Ввод слева -->
         <aside class="side">
-            <div class="side-title">Запрос</div>
-            <textarea id="question" class="qbox" rows="4" placeholder="Введите запрос…"></textarea>
-            <button id="submit" type="button" class="btn-side">Отправить</button>
-            <div id="status" class="side-status" hidden></div>
             <div class="side-title side-sub">История</div>
             <ul id="reqlist" class="reqlist"></ul>
             <button id="analyze" type="button" class="btn-side link"
@@ -137,10 +133,31 @@
                     <label class="compact-label">
                         <span>Сжатие истории автоматически: сохранить</span>
                         <input type="number" id="compact-keep" class="gen-input compact-input"
-                               min="0" max="100" step="1" placeholder="10">
+                               min="0" max="100" step="1" placeholder="0">
                         <span>последних сообщений (0 — не сжимать)</span>
                     </label>
                     <span class="gen-note">ранняя история → summary, последние N — полностью; 0 — сжатие выключено</span>
+                </div>
+
+                <!-- Стратегия управления контекстом (взаимоисключающие) -->
+                <div class="gen-bar strategy-bar">
+                    <span class="strategy-label">Стратегия контекста:</span>
+                    <div class="strategy-group" id="strategy-group">
+                        <button type="button" class="strat-btn active" data-strategy="none"
+                                title="Без стратегии: в запрос уходит полная история">Нет</button>
+                        <button type="button" class="strat-btn" data-strategy="sliding"
+                                title="Sliding Window: только последние N сообщений, старое отбрасывается">Sliding</button>
+                        <button type="button" class="strat-btn" data-strategy="facts"
+                                title="Sticky Facts: блок facts (key-value) + последние N сообщений">Facts</button>
+                        <button type="button" class="strat-btn" data-strategy="branch"
+                                title="Branching: независимые ветки диалога от checkpoint">Branch</button>
+                    </div>
+                    <label class="compact-label">
+                        <span>окно N</span>
+                        <input type="number" id="strategy-window" class="gen-input compact-input"
+                               min="0" max="200" step="1" value="10">
+                    </label>
+                    <span class="gen-note">Sliding/Facts: сколько последних сообщений брать (0 — вся история)</span>
                 </div>
             </div>
 
@@ -157,7 +174,29 @@
                     <div id="trace" class="panel-trace">
                         <div class="trace-empty">Задайте вопрос — здесь появится<br>цепочка обработки агентом:<br>Агент → запрос к LLM → … → ответ</div>
                     </div>
+
+                    <!-- Facts (key-value память): стратегия Facts -->
+                    <div class="panel-title panel-title-sub" id="facts-title">Факты (facts)</div>
+                    <div id="facts-box" class="facts-box">
+                        <div class="facts-empty">факты появятся в стратегии «Facts»</div>
+                    </div>
+
+                    <!-- Ветки диалога: стратегия Branch -->
+                    <div class="panel-title panel-title-sub" id="branches-title">Ветки диалога</div>
+                    <div id="branches-box" class="branches-box">
+                        <div class="branches-empty">ветки появятся в стратегии «Branch»</div>
+                    </div>
                 </aside>
+            </div>
+
+            <!-- Ввод запроса — внизу всего чата, по центру (вариант A) -->
+            <div class="composer">
+                <div class="composer-inner">
+                    <textarea id="question" class="qbox composer-input" rows="1"
+                              placeholder="Введите запрос… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+                    <button id="submit" type="button" class="btn-side composer-send">Отправить</button>
+                </div>
+                <div id="status" class="side-status composer-status" hidden></div>
             </div>
         </main>
 

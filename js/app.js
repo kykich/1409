@@ -23,6 +23,11 @@
 
     // Автоматическое сжатие истории (без кнопки — включается само).
     var compactKeep = document.getElementById("compact-keep");
+    // Стратегия управления контекстом (Sliding / Facts / Branch).
+    var strategyGroup = document.getElementById("strategy-group");
+    var strategyWindow = document.getElementById("strategy-window");
+    var factsBox = document.getElementById("facts-box");
+    var branchesBox = document.getElementById("branches-box");
     var tsTotal = document.getElementById("ts-total");
     var tsIn = document.getElementById("ts-in");
     var tsOut = document.getElementById("ts-out");
@@ -385,6 +390,222 @@
     }
 
     // ------------------------------------------------------------------
+    // Стратегия управления контекстом: Sliding / Facts / Branch
+    // ------------------------------------------------------------------
+    var strategyState = { strategy: "none", window: 10 };
+
+    function getStrategyPayload() {
+        var w = parseInt(strategyWindow ? strategyWindow.value : strategyState.window, 10);
+        if (isNaN(w) || w < 0) w = strategyState.window;
+        return { strategy: strategyState.strategy, window: w };
+    }
+
+    function saveStrategySettings() {
+        fetch("/api/strategy", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(getStrategyPayload()),
+        })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+            if (!d || !d.ok) return;
+            strategyState.strategy = d.strategy.strategy;
+            strategyState.window = d.strategy.window;
+            syncStrategyUI();
+            renderFacts(d.facts);
+            renderBranches(d.branches);
+            applyContextStats(d.context);
+        })
+        .catch(function () {});
+    }
+
+    function syncStrategyUI() {
+        if (!strategyGroup) return;
+        var btns = strategyGroup.querySelectorAll(".strat-btn");
+        for (var i = 0; i < btns.length; i++) {
+            btns[i].classList.toggle("active",
+                btns[i].dataset.strategy === strategyState.strategy);
+        }
+        if (strategyWindow) strategyWindow.value = strategyState.window;
+        // Панели facts/веток показываем только в соответствующих стратегиях.
+        var factsTitle = document.getElementById("facts-title");
+        var brTitle = document.getElementById("branches-title");
+        if (factsTitle) factsTitle.style.display =
+            strategyState.strategy === "facts" ? "" : "none";
+        if (factsBox) factsBox.style.display =
+            strategyState.strategy === "facts" ? "" : "none";
+        if (brTitle) brTitle.style.display =
+            strategyState.strategy === "branch" ? "" : "none";
+        if (branchesBox) branchesBox.style.display =
+            strategyState.strategy === "branch" ? "" : "none";
+    }
+
+    function applyStrategyFromServer(strategy) {
+        if (!strategy) return;
+        if (strategy.strategy) strategyState.strategy = strategy.strategy;
+        var w = parseInt(strategy.window, 10);
+        if (!isNaN(w)) strategyState.window = w;
+        syncStrategyUI();
+    }
+
+    if (strategyGroup) {
+        strategyGroup.addEventListener("click", function (e) {
+            var btn = e.target.closest(".strat-btn");
+            if (!btn) return;
+            strategyState.strategy = btn.dataset.strategy;
+            syncStrategyUI();
+            saveStrategySettings();
+        });
+    }
+    if (strategyWindow) {
+        strategyWindow.addEventListener("change", function () {
+            var v = parseInt(strategyWindow.value, 10);
+            if (isNaN(v) || v < 0) v = 0;
+            if (v > 200) v = 200;
+            strategyWindow.value = v;
+            strategyState.window = v;
+            saveStrategySettings();
+        });
+    }
+
+    // ---- Факты (key-value), стратегия Facts ----
+    function renderFacts(facts) {
+        if (!factsBox) return;
+        factsBox.innerHTML = "";
+        var keys = facts ? Object.keys(facts) : [];
+        if (!keys.length) {
+            var empty = document.createElement("div");
+            empty.className = "facts-empty";
+            empty.textContent = "фактов пока нет (обновляются после каждого запроса)";
+            factsBox.appendChild(empty);
+        } else {
+            keys.forEach(function (k) {
+                factsBox.appendChild(factRow(k, facts[k]));
+            });
+        }
+        var actions = document.createElement("div");
+        actions.className = "facts-actions";
+        var add = document.createElement("button");
+        add.type = "button";
+        add.textContent = "+ факт";
+        add.addEventListener("click", function () {
+            factsBox.insertBefore(factRow("", ""), actions);
+        });
+        var save = document.createElement("button");
+        save.type = "button";
+        save.className = "primary";
+        save.textContent = "Сохранить";
+        save.addEventListener("click", saveFacts);
+        actions.appendChild(add);
+        actions.appendChild(save);
+        factsBox.appendChild(actions);
+    }
+
+    function factRow(key, val) {
+        var row = document.createElement("div");
+        row.className = "fact-row";
+        var k = document.createElement("input");
+        k.type = "text"; k.className = "fact-key"; k.value = key || "";
+        k.placeholder = "ключ";
+        var v = document.createElement("input");
+        v.type = "text"; v.className = "fact-val"; v.value = val || "";
+        v.placeholder = "значение";
+        var del = document.createElement("button");
+        del.type = "button"; del.className = "fact-del"; del.textContent = "\u00d7";
+        del.title = "Удалить факт";
+        del.addEventListener("click", function () { row.remove(); });
+        row.appendChild(k); row.appendChild(v); row.appendChild(del);
+        return row;
+    }
+
+    function saveFacts() {
+        if (!factsBox) return;
+        var out = {};
+        var rows = factsBox.querySelectorAll(".fact-row");
+        for (var i = 0; i < rows.length; i++) {
+            var k = rows[i].querySelector(".fact-key").value.trim();
+            var v = rows[i].querySelector(".fact-val").value.trim();
+            if (k) out[k] = v;
+        }
+        fetch("/api/facts", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ facts: out }),
+        })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) { if (d && d.ok) renderFacts(d.facts); })
+        .catch(function () {});
+    }
+
+    // ---- Ветки диалога, стратегия Branch ----
+    function renderBranches(state) {
+        if (!branchesBox) return;
+        branchesBox.innerHTML = "";
+        if (!state || !state.branches) return;
+        var active = state.active_branch || 0;
+        state.branches.forEach(function (b, i) {
+            var row = document.createElement("div");
+            row.className = "branch-row" + (i === active ? " active" : "");
+            var name = document.createElement("span");
+            name.className = "b-name";
+            name.textContent = b.name;
+            var size = document.createElement("span");
+            size.className = "b-size";
+            size.textContent = b.size + " сообщ.";
+            row.appendChild(name);
+            row.appendChild(size);
+            if (state.branches.length > 1) {
+                var del = document.createElement("button");
+                del.type = "button"; del.className = "b-del"; del.textContent = "\u00d7";
+                del.title = "Удалить ветку";
+                del.addEventListener("click", function (e) {
+                    e.stopPropagation();
+                    branchAction({ action: "delete", index: i });
+                });
+                row.appendChild(del);
+            }
+            row.addEventListener("click", function () {
+                branchAction({ action: "switch", index: i });
+            });
+            branchesBox.appendChild(row);
+        });
+
+        var actions = document.createElement("div");
+        actions.className = "branches-actions";
+        var countInp = document.createElement("input");
+        countInp.type = "number"; countInp.min = "1"; countInp.max = "20";
+        countInp.value = "2"; countInp.title = "Сколько веток создать";
+        var create = document.createElement("button");
+        create.type = "button"; create.className = "primary";
+        create.textContent = "Создать ветки от текущего";
+        create.addEventListener("click", function () {
+            branchAction({ action: "create", count: parseInt(countInp.value, 10) || 2 });
+        });
+        actions.appendChild(countInp);
+        actions.appendChild(create);
+        branchesBox.appendChild(actions);
+    }
+
+    function branchAction(payload) {
+        fetch("/api/branches", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+            if (!d || !d.ok) return;
+            renderBranches(d.branches);
+            // Обновляем окно чата из серверной истории (ветка переключена).
+            if (Array.isArray(d.messages)) {
+                items = d.messages.slice();
+                render();
+            }
+        })
+        .catch(function () {});
+    }
+
+    // ------------------------------------------------------------------
     // Статистика токенов в заголовке (текущая сессия)
     // ------------------------------------------------------------------
     // Суммарный расход токенов за сессию: tokIn — вход (запрос), tokOut — выход (ответ)
@@ -626,6 +847,7 @@
             models: selectedModelsPayload(),
             max_tokens: mtValue(),
             compact: getCompactPayload(),
+            strategy: getStrategyPayload(),
         };
 
         fetch("/api/ask_files", {
@@ -700,6 +922,7 @@
             models: selectedModelsPayload(),
             max_tokens: mtValue(),
             compact: getCompactPayload(),
+            strategy: getStrategyPayload(),
         };
         return fetch("/api/ask", {
             method: "POST",
@@ -723,6 +946,8 @@
                 addTokenUsage(data.usage);
                 addAnswerUsage(data.answers);
                 applyContextStats(data.context);
+                if (data.facts) renderFacts(data.facts);
+                if (data.branches) renderBranches(data.branches);
                 renderTrace(data.trace, data.meta);
             }
             return { ok: !!data.ok, error: data.error || "" };
@@ -820,6 +1045,7 @@
             models: selectedModelsPayload(),
             max_tokens: mtValue(),
             compact: getCompactPayload(),
+            strategy: getStrategyPayload(),
         };
 
         fetch("/api/ask", {
@@ -848,6 +1074,8 @@
             addTokenUsage(data.usage);
             addAnswerUsage(data.answers);
             applyContextStats(data.context);
+            if (data.facts) renderFacts(data.facts);
+            if (data.branches) renderBranches(data.branches);
             renderTrace(data.trace, data.meta);
         })
         .catch(function (err) { setStatus("Ошибка связи: " + err.message, "error"); })
@@ -891,8 +1119,11 @@
             .then(function (d) {
                 if (d && d.ok !== false && Array.isArray(d.messages)) {
                     items = d.messages.slice();
-                    // Применяем настройки сжатия с сервера
+                    // Применяем настройки сжатия и стратегии с сервера
                     applyCompactFromServer(d.compact);
+                    applyStrategyFromServer(d.strategy);
+                    renderFacts(d.facts);
+                    renderBranches(d.branches);
                     // накапливаем статистику токенов из сохранённой истории
                     tokIn = 0;
                     tokOut = 0;
@@ -1000,6 +1231,10 @@
     renderModelsTitle();
     resetContextStats();
     renderFiles();
+    // Показываем панели facts/веток согласно активной стратегии.
+    syncStrategyUI();
+    renderFacts({});
+    renderBranches({ branches: [{ name: "main", size: 0 }], active_branch: 0 });
 
     // Загружаем историю с сервера (если она есть на диске).
     loadSession();
