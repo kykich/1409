@@ -48,7 +48,9 @@ def main():
     print("=== Требование 1: последние N сообщений хранятся «как есть» ===")
     store, path = make_store()
     add_turns(store, 8)                      # 16 сообщений
-    keep = config.COMPACT_KEEP
+    # keep задаём явно (по умолчанию в проекте keep = 0 — сжатие выключено).
+    keep = 10
+    store.set_compact(True, keep)
     store.apply_summary("SUMMARY: ранняя часть диалога.", upto=6, keep=keep)
     ctx = store.get_compacted_messages()
     # Должно быть: 1 system-summary + последние keep сообщений
@@ -65,9 +67,10 @@ def main():
 
     print()
     print("=== Требование 2: инкрементальное сжатие начинается с N+1 ===")
-    keep2 = keep
+    keep2 = 10
     # Ровно keep сообщений — сжимать нечего.
     store_eq, path_eq = make_store()
+    store_eq.set_compact(True, keep2)
     add_turns(store_eq, keep2 // 2)          # ровно keep2 сообщений
     n_eq = len(store_eq.snapshot())
     head_eq, _ = store_eq.head_to_compact()
@@ -78,6 +81,7 @@ def main():
 
     # keep+1 сообщение — появилось ровно 1 вытесненное.
     store_plus, path_plus = make_store()
+    store_plus.set_compact(True, keep2)
     add_turns(store_plus, keep2 // 2)        # ровно keep2 сообщений
     store_plus.messages.append({"role": "user", "content": "лишнее"})
     n_plus = len(store_plus.snapshot())

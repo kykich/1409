@@ -60,8 +60,10 @@ def main():
 
     srv._ServerState.agent = FakeAgent()
     srv._ServerState.session = SessionStore(tmp.name)
-
+    # Явно включаем сжатие: в проекте по умолчанию keep = 0 (сжатие выкл.).
+    config.COMPACT_KEEP = 10
     sess = srv._ServerState.session
+    sess.set_compact(True, config.COMPACT_KEEP)
 
     print("=== _maybe_auto_compact: инкрементальное сжатие ===")
     # Добавляем ходов так, чтобы история была НЕ больше keep — сжатия не будет.

@@ -59,6 +59,8 @@ def main():
     tmpdir = tempfile.mkdtemp()
     ss_mod.config.SESSION_DIR = tmpdir
     ss_mod.config.SESSION_FILE = os.path.join(tmpdir, "session.json")
+    # Явно включаем сжатие: в проекте по умолчанию keep = 0 (сжатие выкл.).
+    ss_mod.config.COMPACT_KEEP = 10
 
     from web import server
 

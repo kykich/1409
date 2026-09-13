@@ -19,10 +19,19 @@ JSON-API:
     GET  /                  - страница (index.html)
     GET  /css/*,/js/*       - стили и скрипты
     GET  /api/model         - список моделей, которые обслуживает агент
-    POST /api/ask           - {question, models[], max_tokens?} -> ответ
+    GET  /api/session       - сохранённая история + стратегия + facts + ветки
+    POST /api/ask           - {question, models[], max_tokens?, compact?,
+                               strategy?} -> ответ
     POST /api/ask_files     - {files[], question?, models[], max_tokens?} ->
                               разовый анализ приложенных файлов (не сохраняется)
     POST /api/analyze       - {question, answers[]} -> анализ (через агента)
+    POST /api/newchat       - начать новый разговор (очистить историю)
+    POST /api/compact       - {enabled, keep} -> настройки сжатия (summary)
+    POST /api/compact_summary - {keep} -> дописать вытесненное в summary
+    POST /api/strategy      - {strategy, window} -> стратегия контекста
+                              (none / sliding / facts / branch)
+    POST /api/facts         - {facts:{ключ:значение}} -> сохранить блок facts
+    POST /api/branches      - {action:"create"|"switch"|"delete", …} -> ветки
 """
 import json
 import mimetypes
@@ -118,6 +127,9 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 "messages": self.session.snapshot(),
                 "compact": self.session.get_compact(),
                 "context": self.session.context_stats(),
+                "strategy": self.session.get_strategy(),
+                "facts": self.session.get_facts(),
+                "branches": self.session.branches_state(),
             })
         self._send_json(404, {"ok": False, "error": "Not Found"})
 
@@ -137,6 +149,12 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             return self._handle_compact()
         if urllib.parse.urlparse(self.path).path == "/api/compact_summary":
             return self._handle_compact_summary()
+        if urllib.parse.urlparse(self.path).path == "/api/strategy":
+            return self._handle_strategy()
+        if urllib.parse.urlparse(self.path).path == "/api/facts":
+            return self._handle_facts()
+        if urllib.parse.urlparse(self.path).path == "/api/branches":
+            return self._handle_branches()
         self._send_json(404, {"ok": False, "error": "Not Found"})
 
     # ---------------- Статика ----------------
@@ -217,11 +235,16 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             self.session.set_compact(compact.get("enabled"),
                                      compact.get("keep"),
                                      None)
+        # Стратегия управления контекстом (если клиент прислал).
+        strategy = data.get("strategy")
+        if isinstance(strategy, dict):
+            self.session.set_strategy(strategy.get("strategy"),
+                                      strategy.get("window"))
         compact = self.session.get_compact()
 
-        # Управление контекстом: в запрос уходит сжатая история
-        # (summary + последние keep сообщений) вместо полной истории.
-        history = self.session.get_compacted_messages()
+        # Управление контекстом: применяем АКТИВНУЮ стратегию
+        # (sliding / facts / branch) и, поверх неё, сжатие summary.
+        history = self.session.get_context_messages()
 
         result = self.agent.answer(question, history, selected,
                                    max_tokens=max_tokens,
@@ -236,14 +259,36 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 "meta": result.get("meta", ""),
                 "usage": result.get("usage"),
             })
+            # Стратегия Facts: обновляем блок facts после каждого сообщения
+            # пользователя (через GigaChat).
+            self._maybe_update_facts(question, result)
             # Сжатие: если появились вытесненные сообщения — дописываем их
-            # в summary (инкрементально; для keep=5 — начиная с 6-го сообщения).
+            # в summary (инкрементально; работает только при keep > 0).
             self._maybe_auto_compact()
             result["compact"] = self.session.get_compact()
+            result["strategy"] = self.session.get_strategy()
+            result["facts"] = self.session.get_facts()
+            result["branches"] = self.session.branches_state()
             # Статистика управления контекстом (сжатых/использованных из
             # summary сообщений) для панели интерфейса.
             result["context"] = self.session.context_stats()
         return self._send_json(200, result)
+
+    def _maybe_update_facts(self, question, result):
+        """Обновляет блок facts после хода пользователя (стратегия Facts)."""
+        try:
+            if self.session.get_strategy().get("strategy") != "facts":
+                return
+            prev = self.session.get_facts()
+            last_turn = [
+                {"role": "user", "content": str(question)},
+                {"role": "assistant", "content": result.get("text", "")},
+            ]
+            facts = self.agent.update_facts(prev, last_turn)
+            if isinstance(facts, dict):
+                self.session.set_facts(facts)
+        except Exception as exc:
+            print("[FACTS] обновление не удалось: %s" % exc, flush=True)
 
     def _handle_ask_files(self):
         """Разовый анализ приложенных файлов.
@@ -363,6 +408,63 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         return self._send_json(200, {
             "ok": False, "summary": self.session.get_compact().get("summary", ""),
             "detail": "Не удалось обновить summary.",
+        })
+
+    def _handle_strategy(self):
+        """Управление стратегией контекста: none / sliding / facts / branch."""
+        data = self._read_json_body()
+        if not data:
+            return self._send_json(400, {"ok": False, "error": "Bad JSON."})
+        state = self.session.set_strategy(data.get("strategy"),
+                                          data.get("window"))
+        return self._send_json(200, {
+            "ok": True,
+            "strategy": state,
+            "context": self.session.context_stats(),
+            "facts": self.session.get_facts(),
+            "branches": self.session.branches_state(),
+        })
+
+    def _handle_facts(self):
+        """Просмотр/редактирование блока facts (key-value)."""
+        data = self._read_json_body()
+        if not data:
+            return self._send_json(400, {"ok": False, "error": "Bad JSON."})
+        if "facts" in data and isinstance(data.get("facts"), dict):
+            self.session.set_facts(data.get("facts"))
+        return self._send_json(200, {
+            "ok": True,
+            "facts": self.session.get_facts(),
+        })
+
+    def _handle_branches(self):
+        """Управление ветками: create / switch / delete.
+
+        Ожидаемые поля: action = "create" | "switch" | "delete",
+        name (для create), count (для create), index (для switch/delete).
+        """
+        data = self._read_json_body()
+        if not data:
+            return self._send_json(400, {"ok": False, "error": "Bad JSON."})
+        action = str(data.get("action", "")).strip().lower()
+        if action == "create":
+            state = self.session.create_branch(
+                name=data.get("name"),
+                count=data.get("count"),
+                from_checkpoint=bool(data.get("from_checkpoint", True)))
+        elif action == "switch":
+            state = self.session.switch_branch(data.get("index"))
+        elif action == "delete":
+            state = self.session.delete_branch(data.get("index"))
+        else:
+            return self._send_json(400, {
+                "ok": False,
+                "error": "Неизвестное действие с ветками (action).",
+            })
+        return self._send_json(200, {
+            "ok": True,
+            "branches": state,
+            "messages": self.session.snapshot(),
         })
 
 
