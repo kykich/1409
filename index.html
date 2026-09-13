@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeepSeek — чат</title>
+    <script>
+        // если страницу открыли как ЛОКАЛЬНЫЙ файл — переходим на сервер проекта
+        (function () {
+            try {
+                if (window.location.protocol === "file:") {
+                    var port = window.DS_SERVER_PORT || 8000;
+                    var host = window.DS_SERVER_HOST || "127.0.0.1";
+                    window.location.replace("http://" + host + ":" + port + "/");
+                }
+            } catch (e) { /* беззвучно */ }
+        })();
+    </script>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div class="layout">
+
+        <!-- Ввод слева -->
+        <aside class="side">
+            <div class="side-title">Запрос</div>
+            <textarea id="question" class="qbox" rows="4" placeholder="Введите запрос…"></textarea>
+            <button id="submit" type="button" class="btn-side">Отправить</button>
+            <div id="status" class="side-status" hidden></div>
+            <div class="side-title side-sub">История</div>
+            <ul id="reqlist" class="reqlist"></ul>
+            <button id="analyze" type="button" class="btn-side link"
+                    title="Сравнить три последних ответа и выставить оценку каждому 0–5 (анализ делает GigaChat)">
+                Анализ</button>
+
+            <!-- Файлы/папки для анализа исходников или текста -->
+            <div class="side-title side-sub">Файлы для анализа</div>
+            <div class="files-bar">
+                <label class="files-pick">
+                    <input type="file" id="files-input" multiple hidden>
+                    <span class="btn-side link files-btn">Выбрать файлы</span>
+                </label>
+                <label class="files-pick">
+                    <input type="file" id="dir-input" webkitdirectory directory multiple hidden>
+                    <span class="btn-side link files-btn">Папка</span>
+                </label>
+            </div>
+            <ul id="files-list" class="files-list"></ul>
+            <div class="files-actions">
+                <button id="files-clear" type="button" class="btn-side link">Очистить</button>
+                <button id="files-ask" type="button" class="btn-side">Анализ файлов</button>
+            </div>
+
+            <!-- Автоматический тест: тема из окна запроса отправляется 50 раз -->
+            <div class="side-title side-sub">Автотест</div>
+            <div class="autotest-bar">
+                <label class="autotest-count">
+                    <span>повторов</span>
+                    <input type="number" id="autotest-count" class="gen-input" min="1" max="500" step="1" value="50">
+                </label>
+                <label class="autotest-delay">
+                    <span>пауза, с</span>
+                    <input type="number" id="autotest-delay" class="gen-input" min="0" max="60" step="0.5" value="1">
+                </label>
+            </div>
+            <div class="files-actions">
+                <button id="autotest-start" type="button" class="btn-side"
+                        title="Тема — текст в окне запроса. Он отправится подряд заданное число раз (как обычные запросы, с записью в историю).">
+                    Автотест</button>
+                <button id="autotest-stop" type="button" class="btn-side link" disabled>Стоп</button>
+            </div>
+
+            <button id="newchat" type="button" class="btn-side link"
+                    title="Начать новый разговор (очистить историю)">Новый разговор</button>
+        </aside>
+
+        <!-- Ответ справа -->
+        <main class="chat">
+            <header class="chat-head">
+                <!-- Статистика токенов по моделям + общий итог (столбиком) -->
+                <div class="tstat">
+                    <div class="tstat-head" id="ts-models-title">Токены по моделям</div>
+                    <ul class="tstat-models" id="ts-models">
+                        <!-- JS: строки по моделям (название · запрос/ответ · цена) -->
+                    </ul>
+                    <div class="tstat-totals">
+                        <span class="tstat-total">Итого&nbsp;<b id="ts-total">0</b></span>
+                    </div>
+                    <div class="tstat-bar" title="Запрос (вход) / Ответ (выход), вся сессия">
+                        <span class="seg seg-in" id="seg-in" style="width:50%"></span>
+                        <span class="seg seg-out" id="seg-out" style="width:50%"></span>
+                        <span class="tstat-empty" id="ts-empty">ожидание…</span>
+                    </div>
+                </div>
+
+                <!-- Справа от моделей: Запрос / Ответ / История (столбиком) -->
+                <div class="tstat-io">
+                    <div class="tstat-line">
+                        <i class="sw sw-in"></i>Запрос&nbsp;<b id="ts-in">0</b>
+                    </div>
+                    <div class="tstat-line">
+                        <i class="sw sw-out"></i>Ответ&nbsp;<b id="ts-out">0</b>
+                    </div>
+                    <div class="tstat-line" title="Оценка: доля входных токенов, ушедших на контекст-историю диалога">
+                        <i class="sw sw-hist"></i>История&nbsp;<b id="ts-hist">0</b>
+                        <span class="tstat-pct" id="ts-hist-pct">(0%)</span>
+                    </div>
+                    <div class="tstat-line" title="Сколько сообщений истории покрыто summary (автосжатие)">
+                        <i class="sw sw-compact"></i>Сжато&nbsp;<b id="ts-compacted">0</b>
+                    </div>
+                    <div class="tstat-line" title="Сколько сообщений в запросе заменено summary (вытеснено из контекста)">
+                        <i class="sw sw-fromsum"></i>Из summary&nbsp;<b id="ts-from-summary">0</b>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Выбор моделей: кнопки с названием модели + температура каждой -->
+            <div class="model-bar">
+                <div class="model-bar-hint">Выберите модели для запроса (можно несколько) и температуру каждой:</div>
+                <div id="model-buttons" class="model-list"></div>
+
+                <!-- Глобальная настройка max_tokens (можно включать/выключать) -->
+                <div class="gen-bar">
+                    <label class="gen-switch">
+                        <input type="checkbox" id="max-tokens-enable">
+                        <span class="gen-name">max_tokens</span>
+                    </label>
+                    <input type="number" id="max-tokens" class="gen-input"
+                           min="1" max="100000" step="50" placeholder="2048" disabled>
+                    <span class="gen-note">лимит новых токенов ответа (выкл — значение модели по умолчанию)</span>
+                </div>
+
+                <!-- Автоматическое сжатие истории (без кнопки).
+                     Summary генерируется само после накопления указанного
+                     числа несжатых сообщений. -->
+                <div class="gen-bar compact-bar">
+                    <label class="compact-label">
+                        <span>Сжатие истории автоматически: сохранить</span>
+                        <input type="number" id="compact-keep" class="gen-input compact-input"
+                               min="0" max="100" step="1" placeholder="10">
+                        <span>последних сообщений (0 — не сжимать)</span>
+                    </label>
+                    <span class="gen-note">ранняя история → summary, последние N — полностью; 0 — сжатие выключено</span>
+                </div>
+            </div>
+
+            <!-- Окно ответа разделено: слева — ответ модели, справа — ход запросов -->
+            <div class="chat-body">
+                <!-- Левая часть: поток сообщений / ответ модели -->
+                <div id="stream" class="stream">
+                    <!-- JS вставляет пузыри сообщений -->
+                </div>
+
+                <!-- Правая часть: ход запросов (цепочка агента) -->
+                <aside class="agent-panel">
+                    <div class="panel-title">Ход запросов · агент</div>
+                    <div id="trace" class="panel-trace">
+                        <div class="trace-empty">Задайте вопрос — здесь появится<br>цепочка обработки агентом:<br>Агент → запрос к LLM → … → ответ</div>
+                    </div>
+                </aside>
+            </div>
+        </main>
+
+    </div>
+    <script src="/js/app.js"></script>
+</body>
+</html>

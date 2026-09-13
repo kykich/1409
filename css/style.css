@@ -1,0 +1,724 @@
+/* Рабочее окно чата: слева 15% ввод запроса, справа 85% ответ.
+   Внутри окна ответа две колонки: слева ответ модели, справа «Ход запросов»
+   (цепочка действий агента: Агент -> LLM -> ... -> ответ). */
+
+* { box-sizing: border-box; }
+
+:root {
+    --accent: #4d6bfe;
+    --accent-dark: #3b54d6;
+    --text: #223;
+    --muted: #8a92a6;
+    --side-bg: #262b3a;
+    --side-fg: #e2e6f0;
+    --chat-bg: #f4f6fc;
+    --own-bg: #dfe6ff;
+    --ai-bg: #ffffff;
+}
+
+html, body { height: 100%; margin: 0; }
+body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--text); overflow: hidden; }
+
+.layout {
+    display: flex;
+    height: 100vh;
+    width: 100vw;
+}
+
+/* ===== СЛЕВА: 15% ===== */
+.side {
+    width: 15%;
+    min-width: 120px;
+    background: var(--side-bg);
+    color: var(--side-fg);
+    display: flex;
+    flex-direction: column;
+    padding: 12px 10px;
+    gap: 8px;
+    /* Панель целиком НЕ прокручивается: фиксируем ввод и кнопки на месте,
+       а собственную прокрутку получает только список истории (.reqlist). */
+    overflow: hidden;
+    min-height: 0;
+}
+/* Ввод и кнопки сохраняют свой размер и не сжимаются историей */
+.side > .side-title,
+.side > .qbox,
+.side > .btn-side,
+.side > .side-status {
+    flex: 0 0 auto;
+}
+
+.side-title {
+    font-weight: 700;
+    font-size: .82rem;
+    color: #cfd6ea;
+    letter-spacing: .3px;
+}
+.side-sub { margin-top: 6px; }
+
+.qbox {
+    width: 100%;
+    font: inherit;
+    font-size: .8rem;
+    padding: 8px;
+    border-radius: 6px;
+    border: none;
+    resize: vertical;
+    background: #343c52;
+    color: #fff;
+}
+.qbox::placeholder { color: #9aa2bd; }
+.qbox:focus { outline: 2px solid var(--accent); }
+
+.btn-side {
+    width: 100%;
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 9px 6px;
+    border-radius: 6px;
+    font-weight: 600;
+    font-size: .8rem;
+    cursor: pointer;
+}
+.btn-side:hover { background: var(--accent-dark); }
+.btn-side:disabled { background: #6f7bb8; cursor: not-allowed; }
+.btn-side.link { background: #38405c; font-weight: 400; }
+.btn-side.link:hover { background: #465275; }
+
+.side-status {
+    font-size: .72rem;
+    padding: 6px;
+    border-radius: 5px;
+    background: #31384f;
+}
+.side-status.error { background: #5a2a33; color: #ffb9c2; }
+.side-status.ok { background: #1f4436; color: #b4f0cf; }
+
+.reqlist {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    /* История — единственная прокручиваемая область левой панели.
+       flex:1 + min-height:0 заставляют список расти в пределах свободного
+       места и прокручиваться внутри, а не растягивать/сжимать окно ввода. */
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+}
+/* Аккуратная полоса прокрутки истории */
+.reqlist::-webkit-scrollbar { width: 8px; }
+.reqlist::-webkit-scrollbar-track { background: transparent; }
+.reqlist::-webkit-scrollbar-thumb {
+    background: #4a5270;
+    border-radius: 6px;
+}
+.reqlist::-webkit-scrollbar-thumb:hover { background: #5b6488; }
+.reqlist { scrollbar-width: thin; scrollbar-color: #4a5270 transparent; }
+.reqlist li {
+    padding: 6px 6px;
+    margin: 2px 0;
+    border-radius: 5px;
+    font-size: .7rem;
+    line-height: 1.25;
+    color: #b7bfd6;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    word-break: break-word;
+}
+.reqlist li:hover { background: #363e57; }
+.reqlist li.active { background: #3d4870; border-left-color: var(--accent); color: #fff; }
+
+/* ===== СПРАВА: 85% ===== */
+.chat {
+    width: 85%;
+    display: flex;
+    flex-direction: column;
+    background: var(--chat-bg);
+}
+
+.chat-head {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 22px;
+    padding: 10px 22px;
+    background: #fff;
+    border-bottom: 1px solid #e3e7f2;
+    flex-shrink: 0;
+}
+.model-tag { font-size: .78rem; color: var(--muted); white-space: nowrap; }
+
+/* Блок «Запрос / Ответ / История» — сразу после статистики по моделям,
+   столбиком (сверху вниз) */
+.tstat-io {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    flex-shrink: 0;
+}
+.tstat-line {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    font-size: .74rem;
+    color: #4a5568;
+    line-height: 1.35;
+    white-space: nowrap;
+}
+.tstat-line b { color: #1b2559; font-variant-numeric: tabular-nums; }
+
+/* ===== Тело окна ответа: две колонки ===== */
+.chat-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: row;
+}
+.chat-body > .stream {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+/* Левая часть — поток ответов модели */
+.stream {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 18px 22px 12px;
+}
+
+/* Правая панель «Ход запросов» (цепочка агента) */
+.agent-panel {
+    width: 25%;
+    min-width: 240px;
+    max-width: 360px;
+    background: #eef0f7;
+    border-left: 1px solid #d5daea;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    flex-shrink: 0;
+}
+.panel-title {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    padding: 10px 14px;
+    background: #2d3450;
+    color: #fff;
+    font-size: .78rem;
+    font-weight: 700;
+    letter-spacing: .3px;
+}
+.panel-hint {
+    padding: 6px 14px;
+    font-size: .68rem;
+    color: #7d879c;
+    border-bottom: 1px solid #d9deeb;
+}
+#trace { padding: 10px 12px 18px; }
+
+/* Пустое состояние правой панели */
+.trace-empty {
+    font-size: .78rem;
+    color: #7d879c;
+    text-align: center;
+    margin-top: 12px;
+    line-height: 1.55;
+}
+.trace-empty code { font-size: .72rem; background: #dfe3f0; padding: 1px 6px; border-radius: 4px; }
+
+/* ===== Сообщения чата ===== */
+.msg { margin-bottom: 16px; }
+.msg .bubble {
+    padding: 11px 15px;
+    border-radius: 12px;
+    font-size: .95rem;
+    line-height: 1.5;
+}
+/* вопрос пользователя — справа, синим */
+.msg.q { margin-left: auto; max-width: 90%; }
+.msg.q .bubble { background: var(--own-bg); border-top-right-radius: 3px; color: #1e2650; }
+/* ответ модели — слева, занимает всю ширину */
+.msg.a { width: 100%; max-width: 100%; }
+.msg.a .bubble {
+    background: var(--ai-bg);
+    border: 1px solid #e3e7f2;
+    border-top-left-radius: 3px;
+    width: 100%;
+}
+
+.msg.a table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: .92em; }
+.msg.a th { background: var(--accent); color: #fff; padding: 7px 10px; text-align: center; border: 1px solid var(--accent); }
+.msg.a td { padding: 6px 10px; border: 1px solid #e0e4f0; vertical-align: top; }
+.msg.a tr:nth-child(even) td { background: #f7f8fc; }
+.msg.a .desc-col { text-align: justify; }
+.msg.a ul { padding-left: 22px; }
+.msg.a h2, .msg.a h3, .msg.a h4 { margin: .6em 0 .3em; }
+.msg.a code { background: #eef1f8; padding: 1px 5px; border-radius: 4px; font-size: .9em; }
+
+.scroll-target .bubble { outline: 2px dashed var(--accent); outline-offset: 4px; }
+
+/* ===== Модели (DeepSeek-flash + GigaChat) ===== */
+.msg.a .variant {
+    margin: 12px 0;
+    border: 1px solid #d8deee;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #fff;
+}
+.msg.a .variant + .variant { margin-top: 16px; }
+
+.msg.a .variant-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 12px;
+    border-bottom: 1px solid #e6e9f4;
+    background: rgba(31, 45, 90, 0.03);
+    border-radius: 9px 9px 0 0;
+}
+.msg.a .variant-name {
+    font-weight: 800;
+    font-size: .98rem;
+    white-space: nowrap;
+}
+.msg.a .variant-metrics {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 1px;
+    font-size: .72rem;
+    color: #6b7690;
+    line-height: 1.25;
+}
+.msg.a .variant-metrics span { white-space: nowrap; }
+.msg.a .variant-body { padding: 8px 14px 12px; }
+
+.msg.a .variant-ds-flash .variant-name { color: #2c4ecf; }
+.msg.a .variant-gc-base .variant-name { color: #22843a; }
+
+/* Отчёт "Анализ" (кнопка Анализ) */
+.msg.a .analyze-block {
+    border-left: 4px solid var(--accent);
+    background: #fbfcff;
+    padding: 4px 10px;
+    border-radius: 6px;
+}
+
+/* ===== Правая панель: цепочка «Ход запросов» ===== */
+.ts-list { list-style: none; margin: 0; padding: 0; }
+.tstep {
+    position: relative;
+    margin: 0 0 16px;
+    padding-left: 26px;
+}
+/* точка-узел */
+.tstep::before {
+    content: "";
+    position: absolute;
+    left: 6px;
+    top: 3px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #c3cadc;
+    box-shadow: inset 0 0 0 2px #fff, 0 1px 2px rgba(0,0,0,.15);
+}
+/* вертикальная линия-цепочка */
+.tstep:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    left: 11px;
+    top: 20px;
+    bottom: -18px;
+    width: 2px;
+    background: #cdd4e6;
+}
+/* цвет узла по типу шага */
+.tstep.enter::before  { background: #4d6bfe; }
+.tstep.act::before    { background: #8a63d2; }
+.tstep.branch::before { background: #f2a03d; }
+.tstep.llm::before    { background: #3fae5a; }
+.tstep.llm.fail::before { background: #d4575f; }
+.tstep.exit::before   { background: #27427a; }
+
+.tstep .t-head {
+    font-size: .8rem;
+    font-weight: 700;
+    color: #2b3350;
+    line-height: 1.3;
+}
+.tstep .t-badges { margin-top: 3px; }
+.tstep .t-detail {
+    font-size: .72rem;
+    color: #5f6a85;
+    margin-top: 4px;
+    line-height: 1.4;
+}
+.tstep.llm.fail .t-head { color: #8f1c24; }
+
+.badge {
+    display: inline-block;
+    font-size: .62rem;
+    font-weight: 800;
+    padding: 1px 6px;
+    border-radius: 8px;
+    margin-right: 4px;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+.badge.kind {
+    background: #e0e5f3;
+    color: #4a5370;
+    text-transform: uppercase;
+    letter-spacing: .2px;
+}
+.badge.gok   { background: #d6f2dd; color: #1d7a34; }
+.badge.gfail { background: #f6d6da; color: #b02a37; }
+.badge.dur   { background: #e3e9fb; color: #3b4ecc; }
+
+/* ===== Панель выбора моделей (кнопки + температура) ===== */
+.model-bar {
+    flex-shrink: 0;
+    background: #fff;
+    border-bottom: 1px solid #e3e7f2;
+    padding: 8px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.model-bar-hint {
+    font-size: .72rem;
+    color: var(--muted);
+}
+.model-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+.model-ctrl {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid #dfe4f0;
+    border-radius: 9px;
+    padding: 6px 10px;
+    background: #f7f8fc;
+}
+.model-ctrl.active {
+    border-color: var(--accent);
+    background: #eef1ff;
+    box-shadow: 0 0 0 1px var(--accent);
+}
+.model-ctrl .m-btn {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+    font-size: .82rem;
+    padding: 3px 2px;
+    color: #1a1a2e;
+}
+.model-ctrl .m-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 2px solid #c3c9da;
+    background: #fff;
+    flex-shrink: 0;
+}
+.model-ctrl.active .m-dot {
+    border-color: transparent;
+    background: var(--accent);
+}
+.model-ctrl.inactive { opacity: .55; filter: grayscale(.4); }
+.model-temp {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: .68rem;
+    color: #5f6a85;
+}
+.model-temp label { cursor: default; }
+.model-temp input {
+    width: 62px;
+    font: inherit;
+    font-size: .72rem;
+    padding: 2px 5px;
+    border: 1px solid #cdd4e6;
+    border-radius: 5px;
+    background: #fff;
+    color: #223;
+}
+
+/* ===== Глобальная настройка max_tokens (вкл/выкл + ввод) ===== */
+.gen-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    padding-top: 6px;
+    margin-top: 2px;
+    border-top: 1px dashed #e3e7f2;
+}
+.gen-switch {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    cursor: pointer;
+    font-weight: 700;
+    font-size: .82rem;
+    color: #1a1a2e;
+    user-select: none;
+}
+.gen-switch input { cursor: pointer; width: auto; }
+.gen-name { font-family: 'Consolas', monospace; }
+.gen-input {
+    width: 110px;
+    font: inherit;
+    font-size: .8rem;
+    padding: 4px 8px;
+    border: 1px solid #cdd4e6;
+    border-radius: 6px;
+    background: #fff;
+    color: #223;
+    transition: opacity .15s;
+}
+.gen-input:disabled {
+    opacity: .45;
+    background: #f0f2f8;
+    cursor: not-allowed;
+}
+.gen-note {
+    font-size: .68rem;
+    color: var(--muted);
+}
+
+/* ===== Сжатие истории ===== */
+.compact-bar {
+    border-top-style: dashed;
+}
+.compact-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: .78rem;
+    color: #1a1a2e;
+}
+.compact-label span {
+    white-space: nowrap;
+}
+.compact-input {
+    width: 70px;
+}
+
+/* ===== Статистика токенов в заголовке (по моделям + полоска) ===== */
+.tstat {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 5px;
+    min-width: 260px;
+    max-width: 460px;
+    padding: 0;
+}
+.tstat-head {
+    font-size: .68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .3px;
+    color: #8a92a6;
+}
+.tstat-head-models {
+    text-transform: none;
+    color: #4a5370;
+    font-weight: 700;
+    letter-spacing: 0;
+}
+/* Столбик моделей */
+.tstat-models {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.tstat-model {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: .74rem;
+    line-height: 1.35;
+    padding: 1px 0;
+}
+.tstat-model .tm-name { color: #2b3350; font-weight: 700; }
+.tstat-model .tm-val { color: #4a5568; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tstat-model.empty { color: #a1a8bb; font-style: italic; justify-content: flex-start; }
+
+.tstat-totals {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: .76rem;
+    color: #1b2559;
+    font-weight: 700;
+    padding-top: 3px;
+    border-top: 1px solid #eef0f8;
+    width: 100%;
+}
+.tstat-total { white-space: nowrap; }
+.tstat-total b { color: #1b2559; }
+
+.sw {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    margin-right: 3px;
+    vertical-align: baseline;
+}
+.sw-in  { background: #4d6bfe; }
+.sw-out { background: #22a06b; }
+.sw-hist { background: #e0952f; }
+.sw-compact { background: #8a63d2; }
+.sw-fromsum { background: #6a44b5; }
+
+.tstat-pct { color: #b07b1e; font-weight: 700; }
+
+.tstat-bar {
+    position: relative;
+    width: 100%;
+    min-width: 180px;
+    height: 13px;
+    border-radius: 7px;
+    background: #eef0f8;
+    overflow: hidden;
+    border: 1px solid #e3e7f2;
+}
+.tstat-bar .seg {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    height: 100%;
+    transition: width .45s ease;
+}
+.tstat-bar .seg-in  { background: linear-gradient(90deg,#4d6bfe,#7189ff); }
+.tstat-bar .seg-out { background: linear-gradient(90deg,#22a06b,#3fcf8f); }
+.tstat-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: .66rem;
+    color: #a1a8bb;
+}
+
+/* ===== Подключение файлов для анализа (левая панель) ===== */
+.files-bar {
+    display: flex;
+    gap: 6px;
+}
+.files-pick { flex: 1 1 0; }
+.files-pick .files-btn {
+    display: block;
+    text-align: center;
+    width: 100%;
+    box-sizing: border-box;
+}
+.files-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 140px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    /* не схлопывается: размер фиксирован, прокрутка внутри */
+    flex: 0 0 auto;
+}
+.files-empty {
+    font-size: .7rem;
+    color: #8a92a6;
+    font-style: italic;
+    padding: 2px 4px;
+}
+.files-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: .7rem;
+    background: #31384f;
+    border-radius: 5px;
+    padding: 3px 6px;
+    color: #cfd6ea;
+}
+.files-item .fname {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.files-item .fmeta {
+    flex: 0 0 auto;
+    color: #8a92a6;
+    font-size: .64rem;
+}
+.files-item .fdel {
+    flex: 0 0 auto;
+    border: none;
+    background: transparent;
+    color: #b7bfd6;
+    cursor: pointer;
+    font-size: .9rem;
+    line-height: 1;
+    padding: 0 2px;
+}
+.files-item .fdel:hover { color: #ffb9c2; }
+.files-list::-webkit-scrollbar { width: 8px; }
+.files-list::-webkit-scrollbar-thumb { background: #4a5270; border-radius: 6px; }
+.files-actions {
+    display: flex;
+    gap: 6px;
+}
+.files-actions .btn-side { flex: 1 1 0; }
+
+/* ===== Автотест: 50 запросов по теме (левая панель) ===== */
+.autotest-bar {
+    display: flex;
+    gap: 6px;
+    align-items: flex-end;
+}
+.autotest-bar label {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: .66rem;
+    color: #8a92a6;
+}
+.autotest-bar .autotest-count { flex: 1 1 0; }
+.autotest-bar .autotest-delay { flex: 1 1 0; }
+.autotest-bar .gen-input {
+    width: 100%;
+    box-sizing: border-box;
+}
+.autotest-bar input:disabled {
+    opacity: .5;
+}
+
+
