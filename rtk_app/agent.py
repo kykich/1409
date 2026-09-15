@@ -492,56 +492,7 @@ class Agent:
         return ("Сгенерировано: %s · суммарно токенов: %d · моделей: %s"
                 % (ts, total_tokens, sources))
 
-    # ---- вспомогательная операция "анализ" (тоже через агента) ----
-
-    def analyze(self, question, answers, cap=6000):
-        """Просит модель проанализировать несколько ответов.
-
-        Реализует внутреннюю логику построения аналитического запроса.
-        """
-        lines = [
-            "Сравни эти ответы нескольких ИИ-моделей на один вопрос.",
-            "Для каждого ответа: разбери сильные и слабые стороны, отметь",
-            "совпадения и расхождения между ответами, сделай итоговый вывод",
-            "о том, какой ответ наиболее полный и точный.",
-            "В конце для КАЖДОГО ответа укажи оценку по шкале от 0 до 5",
-            "(целая или с одним знаком после запятой) в строке вида:",
-            '  ОЦЕНКА "<название модели>": X из 5',
-        ]
-        if question:
-            lines += ["", "Вопрос: " + str(question)]
-        lines += ["", "----- Ответы моделей -----"]
-        for a in answers or []:
-            label = a.get("label") or "Модель"
-            text = self._cap(a.get("text", ""), cap)
-            lines += ["", "### " + label, text]
-        user_content = "\n".join(lines)
-        messages = [{"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_content}]
-        try:
-            t0 = time.perf_counter()
-            res = gigachat.chat(messages, model=config.GC_MODEL)
-            elapsed = time.perf_counter() - t0
-            analysis_text = res.get("content", "") if isinstance(res, dict) else str(res)
-            try:
-                frag = html_report.text_to_html_paragraphs(analysis_text)
-            except Exception:
-                frag = "<p>" + str(analysis_text) + "</p>"
-            meta = "Анализ ответов · GigaChat · время: %.2f c" % elapsed
-            return Ok(self).value(ok=True,
-                                  html="<div class='analyze-block'>%s</div>" % frag,
-                                  text=analysis_text, meta=meta)
-        except Exception as exc:
-            return Ok(self).value(
-                ok=False, html="", text="",
-                error="Ошибка анализа через GigaChat: %s" % exc)
-
-    @staticmethod
-    def _cap(text, n):
-        s = str(text or "")
-        if len(s) <= n:
-            return s
-        return s[:n] + "\n[... текст обрезан для анализа ...]"
+    # ---- вспомогательные операции с историей (summary / facts) ----
 
     def compact_history(self, messages, keep=None):
         """Генерирует summary для ВЫТЕСНЯЕМОЙ части истории диалога.

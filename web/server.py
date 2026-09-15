@@ -24,7 +24,6 @@ JSON-API:
                                strategy?} -> ответ
     POST /api/ask_files     - {files[], question?, models[], max_tokens?} ->
                               разовый анализ приложенных файлов (не сохраняется)
-    POST /api/analyze       - {question, answers[]} -> анализ (через агента)
     POST /api/newchat       - начать новый разговор (очистить историю)
     POST /api/compact       - {enabled, keep} -> настройки сжатия (summary)
     POST /api/compact_summary - {keep} -> дописать вытесненное в summary
@@ -140,8 +139,6 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             return self._handle_ask()
         if urllib.parse.urlparse(self.path).path == "/api/ask_files":
             return self._handle_ask_files()
-        if urllib.parse.urlparse(self.path).path == "/api/analyze":
-            return self._handle_analyze()
         if urllib.parse.urlparse(self.path).path == "/api/newchat":
             self.session.reset()
             return self._send_json(200, {"ok": True,
@@ -339,21 +336,6 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                                          selected=selected,
                                          max_tokens=max_tokens)
         # ВАЖНО: в сессию не пишем — анализ разовый, сервер ничего не хранит.
-        return self._send_json(200, result)
-
-    def _handle_analyze(self):
-        """Передаёт агенту запрос на сравнение нескольких ответов моделей."""
-        data = self._read_json_body()
-        if not data:
-            return self._send_json(400, {"ok": False, "error": "Bad JSON."})
-        answers = data.get("answers")
-        if not isinstance(answers, list) or not answers:
-            return self._send_json(400, {
-                "ok": False,
-                "error": "Нет ответов для анализа.",
-            })
-        question = str(data.get("question", "")).strip()
-        result = self.agent.analyze(question, answers)
         return self._send_json(200, result)
 
     def _handle_compact(self):
