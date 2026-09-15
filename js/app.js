@@ -14,12 +14,8 @@
     var submit = document.getElementById("submit");
     var statusEl = document.getElementById("status");
     var streamEl = document.getElementById("stream");
-    var reqList = document.getElementById("reqlist");
-    var modelEl = document.getElementById("model");
     var traceEl = document.getElementById("trace");
     var modelBox = document.getElementById("model-buttons");
-    var mtEnable = document.getElementById("max-tokens-enable");
-    var mtInput = document.getElementById("max-tokens");
 
     // Автоматическое сжатие истории (без кнопки — включается само).
     var compactKeep = document.getElementById("compact-keep");
@@ -60,21 +56,12 @@
     var DEFAULT_TEMP = 0.7;
     var TEMP_MIN = 0.0, TEMP_MAX = 1.0, TEMP_STEP = 0.05;
 
-    // Глобальная настройка max_tokens (вкл/выкл + значение).
-    var MTOK_DEFAULT = 2048;
-    var MTOK_MIN = 1, MTOK_MAX = 100000, MTOK_STEP = 50;
-
     // Состояние НАСТРОЙКИ сжатия: сколько последних сообщений хранить
     // полностью. Само сжатие (генерация summary) происходит автоматически
     // на сервере после накопления порога несжатых сообщений.
     var compactState = {
         keep: 10,
     };
-
-    // Данные для кнопки «Анализ».
-    var lastAnswers = null;
-    var lastQuestion = "";
-    var analysisItem = null;
 
     // ------------------------------------------------------------------
     // Хелперы
@@ -91,70 +78,11 @@
         statusEl.className = "side-status" + (kind === "error" ? " error" : (kind === "ok" ? " ok" : ""));
     }
 
-    function scrollToBottom() { streamEl.scrollTop = streamEl.scrollHeight; }
-
-    function shortTitle(t) {
-        var s = String(t || "").replace(/\s+/g, " ").trim();
-        return s.length > 40 ? s.slice(0, 40) + "\u2026" : s;
-    }
-
-    var TRACE_KIND = {
-        enter: "агент", act: "работа", branch: "запрос",
-        llm: "LLM", exit: "агент"
-    };
-
-    function renderTrace(trace, meta) {
-        if (!traceEl) return;
-        if (!trace || !trace.length) {
-            traceEl.innerHTML = '<div class="trace-empty">Задайте вопрос — здесь появится<br>' +
-                'обработка агентом:<br><code>Агент → LLM → … → ответ</code></div>';
-            return;
-        }
-        var ul = document.createElement("ul");
-        ul.className = "ts-list";
-        trace.forEach(function (s, i) {
-            var li = document.createElement("li");
-            var cls = "tstep " + (s.kind || "act");
-            if (s.kind === "llm" && s.ok === false) cls += " fail";
-            li.className = cls;
-
-            var badges = "";
-            var kindLbl = TRACE_KIND[s.kind] || s.kind;
-            badges += '<span class="badge kind">' + esc(kindLbl) + "</span>";
-            if (s.ok === true) badges += '<span class="badge gok">OK</span>';
-            else if (s.ok === false) badges += '<span class="badge gfail">FAIL</span>';
-            if (s.dur_ms != null) {
-                var d = s.dur_ms < 1000 ? Math.round(s.dur_ms) + " мс"
-                                        : parseFloat((s.dur).toFixed(2)) + " c";
-                badges += '<span class="badge dur">' + d + "</span>";
-            }
-            li.innerHTML = '<div class="t-head"><span class="t-badges">' + badges + "</span>" +
-                esc(s.title || "") + "</div>";
-            if (s.detail) {
-                var det = document.createElement("div");
-                det.className = "t-detail";
-                det.textContent = s.detail;
-                li.appendChild(det);
-            }
-            ul.appendChild(li);
-        });
-        if (meta) {
-            var m = document.createElement("div");
-            m.className = "t-detail";
-            m.textContent = "Итог: " + meta;
-            m.style.cssText = "margin-top:8px;border-top:1px dashed #cdd4e6;padding-top:8px;color:#3a4a6e;";
-            ul.appendChild(m);
-        }
-        traceEl.innerHTML = "";
-        traceEl.appendChild(ul);
-    }
-
-    // Полная перерисовка истории (левого списка и правого окна) из items.
+    // Полная перерисовка потока ответов из items.
     function render() {
         streamEl.innerHTML = "";
-        reqList.innerHTML = "";
 
-        items.forEach(function (item, idx) {
+        items.forEach(function (item) {
             if (item.role === "assistant") {
                 var msg = document.createElement("div");
                 msg.className = "msg a";
@@ -166,56 +94,45 @@
             } else {
                 var qMsg = document.createElement("div");
                 qMsg.className = "msg q";
-                qMsg.setAttribute("data-idx", idx);
                 var qb = document.createElement("div");
                 qb.className = "bubble";
                 qb.textContent = item.content;
                 qMsg.appendChild(qb);
                 streamEl.appendChild(qMsg);
-
-                var li = document.createElement("li");
-                li.textContent = shortTitle(item.content);
-                li.title = item.content;
-                li.setAttribute("data-idx", idx);
-                li.addEventListener("click", (function (i) {
-                    return function () { scrollToQuestion(i); };
-                })(idx));
-                reqList.appendChild(li);
             }
         });
 
-        if (analysisItem && analysisItem.html) {
-            var aMsg = document.createElement("div");
-            aMsg.className = "msg a";
-            var aB = document.createElement("div");
-            aB.className = "bubble";
-            aB.innerHTML = analysisItem.html;
-            aMsg.appendChild(aB);
-            streamEl.appendChild(aMsg);
-        }
-        scrollToBottom();
-        // История — отдельная прокручиваемая область: показываем последние записи.
-        if (reqList) reqList.scrollTop = reqList.scrollHeight;
+        streamEl.scrollTop = streamEl.scrollHeight;
     }
 
-    function scrollToQuestion(idx) {
-        clearActive();
-        var q = streamEl.querySelector('.msg.q[data-idx="' + idx + '"]');
-        if (q) {
-            q.classList.add("scroll-target");
-            q.scrollIntoView({ behavior: "smooth", block: "start" });
-        }
-        var lis = reqList.querySelectorAll("li");
-        for (var i = 0; i < lis.length; i++) {
-            if (lis[i].getAttribute("data-idx") === String(idx)) lis[i].classList.add("active");
-        }
-    }
+    var TRACE_KIND = {
+        enter: "агент", act: "работа", branch: "запрос",
+        llm: "LLM", exit: "агент"
+    };
 
-    function clearActive() {
-        var sel = streamEl.querySelectorAll(".scroll-target");
-        for (var i = 0; i < sel.length; i++) sel[i].classList.remove("scroll-target");
-        var act = reqList.querySelectorAll(".active");
-        for (var j = 0; j < act.length; j++) act[j].classList.remove("active");
+    // Компактная цепочка «Ход запросов · агент»: короткие метки шагов,
+    // выстроенные слева направо с переносом по строкам (без прокрутки).
+    function renderTrace(trace, meta) {
+        if (!traceEl) return;
+        if (!trace || !trace.length) {
+            traceEl.innerHTML = '<div class="trace-empty">ход: агент → работа → LLM → ответ</div>';
+            return;
+        }
+        var wrap = document.createElement("div");
+        wrap.className = "ts-chain";
+        trace.forEach(function (s) {
+            var label = TRACE_KIND[s.kind] || s.kind || "?";
+            if (s.kind === "llm" && s.model) label = s.model;
+            var span = document.createElement("span");
+            var cls = "ts-chip " + (s.kind || "act");
+            if (s.kind === "llm" && s.ok === false) cls += " fail";
+            span.className = cls;
+            span.textContent = label;
+            if (s.ok === false) span.title = "ошибка";
+            wrap.appendChild(span);
+        });
+        traceEl.innerHTML = "";
+        traceEl.appendChild(wrap);
     }
 
     // ------------------------------------------------------------------
@@ -287,9 +204,7 @@
     }
 
     function updateModelTag() {
-        if (!modelEl) return;
         var on = modelState.filter(function (m) { return m.on; }).map(function (m) { return m.label; });
-        modelEl.textContent = on.length ? on.join(" · ") : "Все модели (по умолчанию)";
         renderModelsTitle(on);
     }
 
@@ -314,33 +229,6 @@
             .filter(function (m) { return m.on; })
             .map(function (m) { return { label: m.label, temperature: m.temp }; });
     }
-
-    // ------------------------------------------------------------------
-    // Настройка max_tokens (вкл/выкл + значение)
-    // ------------------------------------------------------------------
-    function mtEnabled() { return mtEnable ? mtEnable.checked : false; }
-
-    // Возвращает число токенов из поля, если включено и корректно,
-    // иначе null (настройку не применяем).
-    function mtValue() {
-        if (!mtEnabled()) return null;
-        var v = parseInt(mtInput.value, 10);
-        if (isNaN(v)) return null;
-        if (v < MTOK_MIN) v = MTOK_MIN;
-        if (v > MTOK_MAX) v = MTOK_MAX;
-        return v;
-    }
-
-    function refreshMtUI() {
-        var on = mtEnabled();
-        if (mtInput) {
-            mtInput.disabled = !on;
-            if (on && !mtInput.value) mtInput.value = MTOK_DEFAULT;
-        }
-    }
-
-    if (mtEnable) mtEnable.addEventListener("change", refreshMtUI);
-    if (mtInput) mtInput.addEventListener("change", refreshMtUI);
 
     // ------------------------------------------------------------------
     // Управление контекстом (автоматическое сжатие истории)
@@ -910,7 +798,6 @@
             }),
             question: question,
             models: selectedModelsPayload(),
-            max_tokens: mtValue(),
             compact: getCompactPayload(),
             strategy: getStrategyPayload(),
         };
@@ -937,9 +824,6 @@
             items.push({ role: "user", content: qLabel });
             items.push({ role: "assistant", content: data.text || "",
                          html: data.html || "", answers: data.answers || [] });
-            lastQuestion = question;
-            lastAnswers = data.answers || null;
-            analysisItem = null;
             render();
             addTokenUsage(data.usage);
             addAnswerUsage(data.answers);
@@ -985,7 +869,6 @@
         var body = {
             question: question,
             models: selectedModelsPayload(),
-            max_tokens: mtValue(),
             compact: getCompactPayload(),
             strategy: getStrategyPayload(),
         };
@@ -1004,9 +887,6 @@
                 items.push({ role: "user", content: question });
                 items.push({ role: "assistant", content: data.text || "",
                              html: data.html || "", answers: data.answers || [] });
-                lastQuestion = question;
-                lastAnswers = data.answers || null;
-                analysisItem = null;
                 render();
                 addTokenUsage(data.usage);
                 addAnswerUsage(data.answers);
@@ -1103,12 +983,11 @@
         setStatus("Обрабатываю…", "");
         qEl.value = "";
 
-        // Сервер сам держит историю диалога; передаём вопрос, выбор моделей,
-        // max_tokens и настройки сжатия.
+        // Сервер сам держит историю диалога; передаём вопрос, выбор моделей
+        // и настройки сжатия/стратегии.
         var body = {
             question: question,
             models: selectedModelsPayload(),
-            max_tokens: mtValue(),
             compact: getCompactPayload(),
             strategy: getStrategyPayload(),
         };
@@ -1132,9 +1011,6 @@
             items.push({ role: "user", content: question });
             items.push({ role: "assistant", content: data.text || "",
                          html: data.html || "", answers: data.answers || [] });
-            lastQuestion = question;
-            lastAnswers = data.answers || null;
-            analysisItem = null;
             render();
             addTokenUsage(data.usage);
             addAnswerUsage(data.answers);
@@ -1162,12 +1038,6 @@
 
     function clearLocalChat(statusText) {
         items = [];
-        analysisItem = null;
-        lastAnswers = null;
-        lastQuestion = "";
-        var analyzeBtn = document.getElementById("analyze");
-        if (analyzeBtn) analyzeBtn.disabled = false;
-        // анализ доступен только когда есть три ответа; по умолчанию оставим активным
         resetTokenStats();
         resetModelStats();
         resetContextStats();
@@ -1241,36 +1111,6 @@
     var newchatBtn = document.getElementById("newchat");
     if (newchatBtn) newchatBtn.addEventListener("click", startNewChat);
 
-    // Кнопка «Анализ» (анализ ответов через GigaChat).
-    var analyzeBtn = document.getElementById("analyze");
-    if (analyzeBtn) analyzeBtn.addEventListener("click", function () {
-        if (!lastAnswers || !lastAnswers.length) {
-            setStatus("Сначала получите ответы моделей.", "error");
-            return;
-        }
-        if (busy) return;
-        analyzeBtn.disabled = true;
-        setStatus("Анализирую ответы через GigaChat…", "");
-        fetch("/api/analyze", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ question: lastQuestion, answers: lastAnswers })
-        })
-        .then(function (resp) {
-            return resp.json().catch(function () {
-                return { ok: false, error: "Сервер вернул некорректный ответ." };
-            });
-        })
-        .then(function (data) {
-            if (!data.ok) { setStatus(data.error || "Анализ не выполнен.", "error"); return; }
-            analysisItem = { html: data.html || "", content: data.text || "" };
-            setStatus("Анализ готов.", "ok");
-            render();
-        })
-        .catch(function (err) { setStatus("Ошибка связи: " + err.message, "error"); })
-        .finally(function () { analyzeBtn.disabled = false; });
-    });
-
     // Загружаем список доступных моделей и строим панель выбора.
     fetch("/api/model")
         .then(function (r) { return r.ok ? r.json() : null; })
@@ -1289,9 +1129,7 @@
         })
         .catch(function () {});
 
-    // Инициализация настройки max_tokens (поле выключено по умолчанию).
-    if (mtInput) { mtInput.value = MTOK_DEFAULT; }
-    refreshMtUI();
+    // Инициализация интерфейса.
     renderModelStats();
     renderModelsTitle();
     resetContextStats();

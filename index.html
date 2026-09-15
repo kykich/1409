@@ -23,11 +23,35 @@
 
         <!-- Ввод слева -->
         <aside class="side">
-            <div class="side-title side-sub">История</div>
-            <ul id="reqlist" class="reqlist"></ul>
-            <button id="analyze" type="button" class="btn-side link"
-                    title="Сравнить три последних ответа и выставить оценку каждому 0–5 (анализ делает GigaChat)">
-                Анализ</button>
+            <!-- Стратегия управления контекстом (взаимоисключающие) -->
+            <div class="side-title side-sub">Стратегия контекста</div>
+            <div class="strategy-group side-strategy" id="strategy-group">
+                <button type="button" class="strat-btn active" data-strategy="none"
+                        title="Без стратегии: в запрос уходит полная история">Нет</button>
+                <button type="button" class="strat-btn" data-strategy="sliding"
+                        title="Sliding Window: только последние N сообщений, старое отбрасывается">Sliding</button>
+                <button type="button" class="strat-btn" data-strategy="facts"
+                        title="Sticky Facts: блок facts (key-value) + последние N сообщений">Facts</button>
+                <button type="button" class="strat-btn" data-strategy="branch"
+                        title="Branching: независимые ветки диалога от checkpoint">Branch</button>
+            </div>
+            <label class="compact-label side-label">
+                <span>окно N</span>
+                <input type="number" id="strategy-window" class="gen-input compact-input"
+                       min="0" max="200" step="1" value="10">
+            </label>
+            <span class="side-note">Sliding/Facts: сколько последних сообщений брать (0 — вся история)</span>
+
+            <!-- Summary: автоматическое сжатие истории (без кнопки).
+                 Summary генерируется само после накопления указанного
+                 числа несжатых сообщений. -->
+            <div class="side-title side-sub">Summary</div>
+            <label class="compact-label side-label">
+                <span>сохранить последних сообщений</span>
+                <input type="number" id="compact-keep" class="gen-input compact-input"
+                       min="0" max="100" step="1" placeholder="0">
+            </label>
+            <span class="side-note">ранняя история → summary, последние N — полностью; 0 — сжатие выключено</span>
 
             <!-- Файлы/папки для анализа исходников или текста -->
             <div class="side-title side-sub">Файлы для анализа</div>
@@ -108,73 +132,32 @@
                         <i class="sw sw-fromsum"></i>Из summary&nbsp;<b id="ts-from-summary">0</b>
                     </div>
                 </div>
+
+                <!-- Ход запросов (цепочка агента) — в верхней строке справа -->
+                <div class="trace-head">
+                    <div class="panel-title">Ход запросов · агент</div>
+                    <div id="trace" class="panel-trace">
+                        <div class="trace-empty">ход: агент → работа → LLM → ответ</div>
+                    </div>
+                </div>
             </header>
 
             <!-- Выбор моделей: кнопки с названием модели + температура каждой -->
             <div class="model-bar">
                 <div class="model-bar-hint">Выберите модели для запроса (можно несколько) и температуру каждой:</div>
                 <div id="model-buttons" class="model-list"></div>
-
-                <!-- Глобальная настройка max_tokens (можно включать/выключать) -->
-                <div class="gen-bar">
-                    <label class="gen-switch">
-                        <input type="checkbox" id="max-tokens-enable">
-                        <span class="gen-name">max_tokens</span>
-                    </label>
-                    <input type="number" id="max-tokens" class="gen-input"
-                           min="1" max="100000" step="50" placeholder="2048" disabled>
-                    <span class="gen-note">лимит новых токенов ответа (выкл — значение модели по умолчанию)</span>
-                </div>
-
-                <!-- Автоматическое сжатие истории (без кнопки).
-                     Summary генерируется само после накопления указанного
-                     числа несжатых сообщений. -->
-                <div class="gen-bar compact-bar">
-                    <label class="compact-label">
-                        <span>Сжатие истории автоматически: сохранить</span>
-                        <input type="number" id="compact-keep" class="gen-input compact-input"
-                               min="0" max="100" step="1" placeholder="0">
-                        <span>последних сообщений (0 — не сжимать)</span>
-                    </label>
-                    <span class="gen-note">ранняя история → summary, последние N — полностью; 0 — сжатие выключено</span>
-                </div>
-
-                <!-- Стратегия управления контекстом (взаимоисключающие) -->
-                <div class="gen-bar strategy-bar">
-                    <span class="strategy-label">Стратегия контекста:</span>
-                    <div class="strategy-group" id="strategy-group">
-                        <button type="button" class="strat-btn active" data-strategy="none"
-                                title="Без стратегии: в запрос уходит полная история">Нет</button>
-                        <button type="button" class="strat-btn" data-strategy="sliding"
-                                title="Sliding Window: только последние N сообщений, старое отбрасывается">Sliding</button>
-                        <button type="button" class="strat-btn" data-strategy="facts"
-                                title="Sticky Facts: блок facts (key-value) + последние N сообщений">Facts</button>
-                        <button type="button" class="strat-btn" data-strategy="branch"
-                                title="Branching: независимые ветки диалога от checkpoint">Branch</button>
-                    </div>
-                    <label class="compact-label">
-                        <span>окно N</span>
-                        <input type="number" id="strategy-window" class="gen-input compact-input"
-                               min="0" max="200" step="1" value="10">
-                    </label>
-                    <span class="gen-note">Sliding/Facts: сколько последних сообщений брать (0 — вся история)</span>
-                </div>
             </div>
 
-            <!-- Окно ответа разделено: слева — ответ модели, справа — ход запросов -->
+            <!-- Окно ответа: поток ответов модели и объединённая с ним
+                 секция «Факты / Ветки диалога» (стратегии Facts и Branch) -->
             <div class="chat-body">
-                <!-- Левая часть: поток сообщений / ответ модели -->
+                <!-- Поток сообщений / ответ модели -->
                 <div id="stream" class="stream">
                     <!-- JS вставляет пузыри сообщений -->
                 </div>
 
-                <!-- Правая часть: ход запросов (цепочка агента) -->
-                <aside class="agent-panel">
-                    <div class="panel-title">Ход запросов · агент</div>
-                    <div id="trace" class="panel-trace">
-                        <div class="trace-empty">Задайте вопрос — здесь появится<br>цепочка обработки агентом:<br>Агент → запрос к LLM → … → ответ</div>
-                    </div>
-
+                <!-- Объединённая с центром панель: facts и ветки диалога -->
+                <section class="agent-panel">
                     <!-- Facts (key-value память): стратегия Facts -->
                     <div class="panel-title panel-title-sub" id="facts-title">Факты (facts)</div>
                     <div id="facts-box" class="facts-box">
@@ -186,7 +169,7 @@
                     <div id="branches-box" class="branches-box">
                         <div class="branches-empty">ветки появятся в стратегии «Branch»</div>
                     </div>
-                </aside>
+                </section>
             </div>
 
             <!-- Ввод запроса — внизу всего чата, по центру (вариант A) -->
