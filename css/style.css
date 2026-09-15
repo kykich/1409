@@ -25,10 +25,15 @@ body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--text); overflow:
     width: 100vw;
 }
 
-/* ===== СЛЕВА: 15% ===== */
+/* ===== СЛЕВА: подгоняется по содержимому (ширина по контенту) ===== */
 .side {
-    width: 15%;
-    min-width: 120px;
+    /* Ширина по содержимому: CSS-fallback (fit-content), затем JS уточняет
+       фактическую ширину под самый широкий элемент (см. autoFitSide). */
+    flex: 0 0 auto;
+    width: fit-content;
+    width: max-content;
+    min-width: 180px;
+    max-width: 380px;
     background: var(--side-bg);
     color: var(--side-fg);
     display: flex;
@@ -95,9 +100,10 @@ body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--text); overflow:
 .side-status.error { background: #5a2a33; color: #ffb9c2; }
 .side-status.ok { background: #1f4436; color: #b4f0cf; }
 
-/* ===== СПРАВА: 85% ===== */
+/* ===== СПРАВА: занимает всё оставшееся место ===== */
 .chat {
-    width: 85%;
+    flex: 1 1 auto;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     background: var(--chat-bg);
@@ -300,9 +306,7 @@ body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--text); overflow:
 
 .msg.a .variant-head {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 10px;
+    align-items: center;
     padding: 9px 12px;
     border-bottom: 1px solid #e6e9f4;
     background: rgba(31, 45, 90, 0.03);
@@ -313,20 +317,29 @@ body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--text); overflow:
     font-size: .98rem;
     white-space: nowrap;
 }
-.msg.a .variant-metrics {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    gap: 1px;
-    font-size: .72rem;
-    color: #6b7690;
-    line-height: 1.25;
-}
-.msg.a .variant-metrics span { white-space: nowrap; }
 .msg.a .variant-body { padding: 8px 14px 12px; }
 
 .msg.a .variant-ds-flash .variant-name { color: #2c4ecf; }
 .msg.a .variant-gc-base .variant-name { color: #22843a; }
+
+/* Подсветка в ответе фрагментов, взятых из памяти агента:
+   рабочая — фисташковый фон, долговременная — фуксия. */
+.msg.a .mem-src {
+    border-radius: 3px;
+    padding: 0 2px;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+}
+.msg.a .mem-src-working {
+    background: #d8edbf;
+    color: #2f4a15;
+    box-shadow: inset 0 -2px 0 #93c572;
+}
+.msg.a .mem-src-longterm {
+    background: #f2cef2;
+    color: #5a1a5a;
+    box-shadow: inset 0 -2px 0 #c154c1;
+}
 
 /* ===== Панель выбора моделей (кнопки + температура) ===== */
 .model-bar {
@@ -538,8 +551,11 @@ body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--text); overflow:
 .sw-in  { background: #4d6bfe; }
 .sw-out { background: #22a06b; }
 .sw-hist { background: #e0952f; }
-.sw-compact { background: #8a63d2; }
-.sw-fromsum { background: #6a44b5; }
+/* Рабочая память — фисташковый; долговременная — фуксия */
+.sw-working { background: #93c572; }
+.sw-longterm { background: #c154c1; }
+.mem-name-working { color: #93c572; font-weight: 700; }
+.mem-name-longterm { color: #c154c1; font-weight: 700; }
 
 .tstat-pct { color: #b07b1e; font-weight: 700; }
 
@@ -573,59 +589,89 @@ body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--text); overflow:
     color: #a1a8bb;
 }
 
-/* ===== Подключение файлов для анализа (левая панель) ===== */
-.files-bar {
-    display: flex;
-    gap: 6px;
+/* ===== Память агента (три типа, редактируются раздельно) ===== */
+.mem-block {
+    border: 1px solid #3a4360;
+    border-radius: 7px;
+    padding: 6px 7px;
+    margin-bottom: 7px;
+    background: #2b3247;
 }
-.files-pick { flex: 1 1 0; }
-.files-pick .files-btn {
-    display: block;
-    text-align: center;
-    width: 100%;
-    box-sizing: border-box;
+/* Подсветка блоков памяти: рабочая — фисташковая, долговременная — фуксия
+   (те же цвета, что и метки в блоке «Запрос/Ответ/…»). */
+.mem-working {
+    border-color: #93c572;
+    box-shadow: inset 3px 0 0 #93c572;
 }
-.files-list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    max-height: 140px;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-    /* не схлопывается: размер фиксирован, прокрутка внутри */
-    flex: 0 0 auto;
+.mem-working .mem-head { color: #cfe6b6; }
+.mem-longterm {
+    border-color: #c154c1;
+    box-shadow: inset 3px 0 0 #c154c1;
 }
-.files-empty {
-    font-size: .7rem;
+.mem-longterm .mem-head { color: #e6b6e6; }
+.mem-head {
+    font-size: .72rem;
+    font-weight: 600;
+    color: #cdd5ea;
+    margin-bottom: 2px;
+}
+.mem-tag {
+    display: inline-block;
+    font-size: .6rem;
+    font-weight: 400;
     color: #8a92a6;
-    font-style: italic;
-    padding: 2px 4px;
-}
-.files-item {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: .7rem;
-    background: #31384f;
-    border-radius: 5px;
-    padding: 3px 6px;
-    color: #cfd6ea;
-}
-.files-item .fname {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    background: #232a3d;
+    border-radius: 4px;
+    padding: 1px 5px;
+    margin-bottom: 6px;
     white-space: nowrap;
 }
-.files-item .fmeta {
-    flex: 0 0 auto;
-    color: #8a92a6;
-    font-size: .64rem;
+.mem-info {
+    font-size: .68rem;
+    color: #a7b0c6;
+    font-style: italic;
 }
-.files-item .fdel {
+.mem-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 150px;
+    overflow-y: auto;
+}
+.mem-empty {
+    font-size: .68rem;
+    color: #8a92a6;
+    font-style: italic;
+}
+.mem-row {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+}
+.mem-row .mem-key {
+    flex: 0 0 38%;
+    min-width: 0;
+}
+.mem-row .mem-val {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.mem-row .mem-key,
+.mem-row .mem-val {
+    box-sizing: border-box;
+    background: #232a3d;
+    border: 1px solid #3a4360;
+    border-radius: 5px;
+    color: #dbe2f2;
+    font-size: .68rem;
+    padding: 3px 5px;
+}
+.mem-row .mem-key:focus,
+.mem-row .mem-val:focus {
+    outline: none;
+    border-color: #5a6488;
+}
+.mem-row .mem-del {
     flex: 0 0 auto;
     border: none;
     background: transparent;
@@ -633,39 +679,17 @@ body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--text); overflow:
     cursor: pointer;
     font-size: .9rem;
     line-height: 1;
-    padding: 0 2px;
+    padding: 0 3px;
 }
-.files-item .fdel:hover { color: #ffb9c2; }
-.files-list::-webkit-scrollbar { width: 8px; }
-.files-list::-webkit-scrollbar-thumb { background: #4a5270; border-radius: 6px; }
-.files-actions {
+.mem-row .mem-del:hover { color: #ffb9c2; }
+.mem-rows::-webkit-scrollbar { width: 8px; }
+.mem-rows::-webkit-scrollbar-thumb { background: #4a5270; border-radius: 6px; }
+.mem-actions {
     display: flex;
     gap: 6px;
+    margin-top: 6px;
 }
-.files-actions .btn-side { flex: 1 1 0; }
-
-/* ===== Автотест: 50 запросов по теме (левая панель) ===== */
-.autotest-bar {
-    display: flex;
-    gap: 6px;
-    align-items: flex-end;
-}
-.autotest-bar label {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    font-size: .66rem;
-    color: #8a92a6;
-}
-.autotest-bar .autotest-count { flex: 1 1 0; }
-.autotest-bar .autotest-delay { flex: 1 1 0; }
-.autotest-bar .gen-input {
-    width: 100%;
-    box-sizing: border-box;
-}
-.autotest-bar input:disabled {
-    opacity: .5;
-}
+.mem-actions .btn-side { flex: 1 1 0; font-size: .68rem; padding: 3px 4px; }
 
 /* ===== Стратегия управления контекстом ===== */
 .strategy-bar {

@@ -22,14 +22,14 @@ JSON-API:
     GET  /api/session       - сохранённая история + стратегия + facts + ветки
     POST /api/ask           - {question, models[], max_tokens?, compact?,
                                strategy?} -> ответ
-    POST /api/ask_files     - {files[], question?, models[], max_tokens?} ->
-                              разовый анализ приложенных файлов (не сохраняется)
     POST /api/newchat       - начать новый разговор (очистить историю)
     POST /api/compact       - {enabled, keep} -> настройки сжатия (summary)
     POST /api/compact_summary - {keep} -> дописать вытесненное в summary
     POST /api/strategy      - {strategy, window} -> стратегия контекста
                               (none / sliding / facts / branch)
     POST /api/facts         - {facts:{ключ:значение}} -> сохранить блок facts
+    POST /api/memory        - {type:"working"|"longterm", …} -> память агента
+                              (действия: set/delete/replace/clear, GET-снимок)
     POST /api/branches      - {action:"create"|"switch"|"delete"|"rename", …}
                               -> ветки (rename: {index, name})
 """
@@ -130,6 +130,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 "strategy": self.session.get_strategy(),
                 "facts": self.session.get_facts(),
                 "branches": self.session.branches_state(),
+                "memory": self.session.memory_state(),
             })
         self._send_json(404, {"ok": False, "error": "Not Found"})
 
@@ -137,8 +138,6 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         import urllib.parse
         if urllib.parse.urlparse(self.path).path == "/api/ask":
             return self._handle_ask()
-        if urllib.parse.urlparse(self.path).path == "/api/ask_files":
-            return self._handle_ask_files()
         if urllib.parse.urlparse(self.path).path == "/api/newchat":
             self.session.reset()
             return self._send_json(200, {"ok": True,
@@ -151,6 +150,8 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             return self._handle_strategy()
         if urllib.parse.urlparse(self.path).path == "/api/facts":
             return self._handle_facts()
+        if urllib.parse.urlparse(self.path).path == "/api/memory":
+            return self._handle_memory()
         if urllib.parse.urlparse(self.path).path == "/api/branches":
             return self._handle_branches()
         self._send_json(404, {"ok": False, "error": "Not Found"})
@@ -246,7 +247,8 @@ class WebRequestHandler(BaseHTTPRequestHandler):
 
         result = self.agent.answer(question, history, selected,
                                    max_tokens=max_tokens,
-                                   compact=compact)
+                                   compact=compact,
+                                   memory=self.session.memory_state())
         if result.get("ok"):
             # По одному ходу на ответ модели с уже готовой разметкой
             self.session.append_turn(question, {
@@ -260,6 +262,11 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             # Стратегия Facts: обновляем блок facts после каждого сообщения
             # пользователя (через GigaChat).
             self._maybe_update_facts(question, result)
+            # Счётчики использования памяти: сколько фрагментов ответа
+            # заимствовано из рабочей/долговременной памяти (для интерфейса).
+            mused = result.get("memory_used") or {}
+            self.session.add_memory_usage(mused.get("working", 0),
+                                          mused.get("longterm", 0))
             # Сжатие: если появились вытесненные сообщения — дописываем их
             # в summary (инкрементально; работает только при keep > 0).
             self._maybe_auto_compact()
@@ -267,6 +274,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             result["strategy"] = self.session.get_strategy()
             result["facts"] = self.session.get_facts()
             result["branches"] = self.session.branches_state()
+            result["memory"] = self.session.memory_state()
             # Статистика управления контекстом (сжатых/использованных из
             # summary сообщений) для панели интерфейса.
             result["context"] = self.session.context_stats()
@@ -287,56 +295,6 @@ class WebRequestHandler(BaseHTTPRequestHandler):
                 self.session.set_facts(facts)
         except Exception as exc:
             print("[FACTS] обновление не удалось: %s" % exc, flush=True)
-
-    def _handle_ask_files(self):
-        """Разовый анализ приложенных файлов.
-
-        Файлы уже прочитаны в браузере и приходят как текст {name, path,
-        content}. Сервер НИЧЕГО не сохраняет на диске: результат анализа
-        возвращается клиенту и в историю сессии не пишется.
-        """
-        data = self._read_json_body()
-        if not data:
-            return self._send_json(400, {"ok": False, "error": "Bad JSON."})
-        files = data.get("files")
-        if not isinstance(files, list) or not files:
-            return self._send_json(400, {
-                "ok": False,
-                "error": "Не подключено ни одного файла для анализа.",
-            })
-        # Оставляем только корректные записи с текстовым содержимым.
-        clean = []
-        for f in files:
-            if not isinstance(f, dict):
-                continue
-            content = f.get("content")
-            if not isinstance(content, str):
-                content = "" if content is None else str(content)
-            clean.append({
-                "name": str(f.get("name", "")),
-                "path": str(f.get("path", "")),
-                "content": content,
-            })
-        if not clean:
-            return self._send_json(400, {
-                "ok": False,
-                "error": "Нет пригодных файлов для анализа.",
-            })
-        question = str(data.get("question", "")).strip()
-        selected = data.get("models")
-        if not isinstance(selected, list) or not selected:
-            selected = None
-        max_tokens = data.get("max_tokens")
-        try:
-            max_tokens = int(max_tokens)
-        except (TypeError, ValueError):
-            max_tokens = None
-
-        result = self.agent.answer_files(clean, question,
-                                         selected=selected,
-                                         max_tokens=max_tokens)
-        # ВАЖНО: в сессию не пишем — анализ разовый, сервер ничего не хранит.
-        return self._send_json(200, result)
 
     def _handle_compact(self):
         """Обновляет настройки сжатия сессии (enabled/keep/summary)."""
@@ -419,6 +377,75 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             "ok": True,
             "facts": self.session.get_facts(),
         })
+
+    def _handle_memory(self):
+        """Память агента: чтение/запись трёх типов (short/working/longterm).
+
+        Тело запроса (все поля необязательны, но action определяет смысл):
+            action: "state"  — вернуть снимок всех типов (по умолчанию);
+                    "set"    — записать одну пару: {type, key, value};
+                    "delete" — удалить ключ: {type, key};
+                    "replace"— заменить тип целиком: {type, data:{…}};
+                    "clear"  — очистить тип: {type}.
+            type:   "working" | "longterm" (для "short" запись запрещена —
+                    краткосрочная память ведётся самим диалогом).
+
+        Именно здесь реализован ЯВНЫЙ выбор «что и куда сохраняется» (задание
+        B2): тип памяти задаётся вызывающим кодом, слои не пересекаются.
+        """
+        data = self._read_json_body()
+        if not data:
+            return self._send_json(400, {"ok": False, "error": "Bad JSON."})
+        action = str(data.get("action", "state")).strip().lower()
+        mem_type = data.get("type")
+
+        try:
+            if action == "set":
+                entry = self.session.set_memory_key(
+                    mem_type, data.get("key"), data.get("value"))
+                return self._send_json(200, {
+                    "ok": True, "saved": entry,
+                    "memory": self.session.memory_state(),
+                })
+            if action == "delete":
+                removed = self.session.delete_memory_key(mem_type,
+                                                         data.get("key"))
+                return self._send_json(200, {
+                    "ok": True, "removed": removed,
+                    "memory": self.session.memory_state(),
+                })
+            if action == "replace":
+                saved = self.session.set_memory_bulk(mem_type, data.get("data"))
+                return self._send_json(200, {
+                    "ok": True, "saved": saved,
+                    "memory": self.session.memory_state(),
+                })
+            if action == "clear":
+                mt = str(mem_type or "").strip()
+                if mt not in config.MEMORY_TYPES:
+                    return self._send_json(400, {
+                        "ok": False,
+                        "error": "Неизвестный тип памяти: %r" % (mem_type,),
+                    })
+                if mt == "short":
+                    return self._send_json(400, {
+                        "ok": False,
+                        "error": "Краткосрочная память (диалог) очищается "
+                                 "кнопкой «Новый разговор».",
+                    })
+                self.session.set_memory_bulk(mt, {})
+                return self._send_json(200, {
+                    "ok": True, "memory": self.session.memory_state(),
+                })
+            # action == "state" и всё прочее — отдаём снимок.
+            return self._send_json(200, {
+                "ok": True, "memory": self.session.memory_state(),
+            })
+        except ValueError as exc:
+            return self._send_json(400, {"ok": False, "error": str(exc)})
+        except Exception as exc:
+            return self._send_json(500, {"ok": False,
+                                         "error": "Ошибка памяти: %s" % exc})
 
     def _handle_branches(self):
         """Управление ветками: create / switch / delete / rename.

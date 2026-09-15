@@ -35,15 +35,6 @@
     var tsFromSummary = document.getElementById("ts-from-summary");
     var segIn = document.getElementById("seg-in");
     var segOut = document.getElementById("seg-out");
-    var filesInput = document.getElementById("files-input");
-    var dirInput = document.getElementById("dir-input");
-    var filesList = document.getElementById("files-list");
-    var filesClear = document.getElementById("files-clear");
-    var filesAsk = document.getElementById("files-ask");
-    var autotestStart = document.getElementById("autotest-start");
-    var autotestStop = document.getElementById("autotest-stop");
-    var autotestCount = document.getElementById("autotest-count");
-    var autotestDelay = document.getElementById("autotest-delay");
 
     var busy = false;
 
@@ -615,12 +606,13 @@
         }
     }
 
-    // Счётчики управления контекстом: сколько сообщений сжато (summary)
-    // и сколько сообщений в запросе заменено summary.
+    // Счётчики использования памяти в заголовке: сколько фрагментов ответов
+    // было заимствовано из РАБОЧЕЙ (фисташковая) и ДОЛГОВРЕМЕННОЙ (фуксия)
+    // памяти за сессию (накопительно).
     function applyContextStats(ctx) {
         if (!ctx) return;
-        if (tsCompacted) tsCompacted.textContent = fmt(parseInt(ctx.compacted, 10) || 0);
-        if (tsFromSummary) tsFromSummary.textContent = fmt(parseInt(ctx.from_summary, 10) || 0);
+        if (tsCompacted) tsCompacted.textContent = fmt(parseInt(ctx.memory_used_working, 10) || 0);
+        if (tsFromSummary) tsFromSummary.textContent = fmt(parseInt(ctx.memory_used_longterm, 10) || 0);
     }
 
     function resetContextStats() {
@@ -700,276 +692,141 @@
     }
 
     // ------------------------------------------------------------------
-    // Подключение файлов/папок для анализа (чтение в браузере)
+    // Память агента: три типа (short / working / longterm)
     // ------------------------------------------------------------------
-    // Прикреплённые файлы: [{path, name, content, size}]
-    var attachedFiles = [];
+    // 1) краткосрочная — текущий диалог (автоматическая, только чтение);
+    // 2) рабочая      — данные текущей задачи (редактируется вручную);
+    // 3) долговременная — профиль/решения/знания (редактируется вручную).
+    // Запись идёт ЧЕРЕЗ /api/memory с ЯВНЫМ указанием типа (задание B2).
+    var memShortInfo = document.getElementById("mem-short-info");
+    var memWorkingBox = document.getElementById("mem-working-box");
+    var memLongtermBox = document.getElementById("mem-longterm-box");
 
-    function humanSize(bytes) {
-        var b = bytes || 0;
-        if (b < 1024) return b + " Б";
-        if (b < 1024 * 1024) return (b / 1024).toFixed(1) + " КБ";
-        return (b / 1024 / 1024).toFixed(2) + " МБ";
+    // Рисует строки key=value для редактируемого слоя памяти.
+    function memRow(key, valValDiv) {
+        var row = document.createElement("div");
+        row.className = "mem-row";
+        var k = document.createElement("input");
+        k.type = "text"; k.className = "mem-key"; k.value = key || "";
+        k.placeholder = "ключ";
+        var v = document.createElement("input");
+        v.type = "text"; v.className = "mem-val"; v.value = valValDiv || "";
+        v.placeholder = "значение";
+        var del = document.createElement("button");
+        del.type = "button"; del.className = "mem-del"; del.textContent = "\u00d7";
+        del.title = "Удалить строку";
+        del.addEventListener("click", function () { row.remove(); });
+        row.appendChild(k); row.appendChild(v); row.appendChild(del);
+        return row;
     }
 
-    // Читает выбранные файлы через FileReader (в браузере) и добавляет их.
-    function addFiles(fileList) {
-        var arr = Array.prototype.slice.call(fileList || []);
-        if (!arr.length) return;
-        var pending = arr.length;
-        arr.forEach(function (file) {
-            var reader = new FileReader();
-            reader.onload = function () {
-                attachedFiles.push({
-                    path: (file.webkitRelativePath || file.name || "файл"),
-                    name: file.name || "файл",
-                    content: String(reader.result || ""),
-                    size: file.size || 0
-                });
-                if (--pending === 0) { renderFiles(); }
-            };
-            reader.onerror = function () {
-                setStatus("Не удалось прочитать файл: " + (file.name || "?"), "error");
-                if (--pending === 0) { renderFiles(); }
-            };
-            reader.readAsText(file);
-        });
-    }
-
-    function renderFiles() {
-        if (!filesList) return;
-        filesList.innerHTML = "";
-        if (!attachedFiles.length) {
-            var empty = document.createElement("li");
-            empty.className = "files-empty";
-            empty.textContent = "файлы не подключены";
-            filesList.appendChild(empty);
+    // Отрисовка редактируемого слоя памяти из словаря.
+    function renderMemRows(box, data) {
+        if (!box) return;
+        box.innerHTML = "";
+        var keys = data ? Object.keys(data) : [];
+        if (!keys.length) {
+            var empty = document.createElement("div");
+            empty.className = "mem-empty";
+            empty.textContent = "пусто — добавьте строку";
+            box.appendChild(empty);
             return;
         }
-        attachedFiles.forEach(function (f, i) {
-            var li = document.createElement("li");
-            li.className = "files-item";
-            li.title = f.path;
-            var name = document.createElement("span");
-            name.className = "fname";
-            name.textContent = f.name;
-            var meta = document.createElement("span");
-            meta.className = "fmeta";
-            meta.textContent = humanSize(f.size);
-            var del = document.createElement("button");
-            del.type = "button";
-            del.className = "fdel";
-            del.textContent = "\u00d7";
-            del.title = "Убрать файл";
-            del.addEventListener("click", function () {
-                attachedFiles.splice(i, 1);
-                renderFiles();
-            });
-            li.appendChild(name);
-            li.appendChild(meta);
-            li.appendChild(del);
-            filesList.appendChild(li);
-        });
+        keys.forEach(function (k) { box.appendChild(memRow(k, data[k])); });
     }
 
-    function clearFiles() {
-        attachedFiles = [];
-        renderFiles();
-        if (filesInput) filesInput.value = "";
-        if (dirInput) dirInput.value = "";
-    }
-
-    // Отправляет подключённые файлы на разовый анализ к выбранным моделям.
-    function askFiles() {
-        if (busy) return;
-        if (!attachedFiles.length) {
-            setStatus("Подключите хотя бы один файл.", "error");
-            return;
+    // Собирает словарь из строк редактируемого слоя.
+    function collectMemRows(box) {
+        var out = {};
+        if (!box) return out;
+        var rows = box.querySelectorAll(".mem-row");
+        for (var i = 0; i < rows.length; i++) {
+            var k = rows[i].querySelector(".mem-key").value.trim();
+            var v = rows[i].querySelector(".mem-val").value.trim();
+            if (k) out[k] = v;
         }
-        busy = true;
-        if (filesAsk) filesAsk.disabled = true;
-        submit.disabled = true;
-        setStatus("Анализирую файлы…", "");
+        return out;
+    }
 
-        var question = qEl.value.trim();
-        var body = {
-            files: attachedFiles.map(function (f) {
-                return { name: f.name, path: f.path, content: f.content };
-            }),
-            question: question,
-            models: selectedModelsPayload(),
-            compact: getCompactPayload(),
-            strategy: getStrategyPayload(),
+    // Полная отрисовка всех трёх слоёв из снимка памяти сервера.
+    function renderMemory(mem) {
+        if (!mem) return;
+        // 1) краткосрочная — только информация о диалоге.
+        if (memShortInfo) {
+            var s = mem.short || {};
+            memShortInfo.textContent = "сообщений в диалоге: " + (s.items || 0) +
+                " · веток: " + (s.branches || 1);
+        }
+        // 2) рабочая и 3) долговременная — редактируемые.
+        renderMemRows(memWorkingBox, mem.working || {});
+        renderMemRows(memLongtermBox, mem.longterm || {});
+    }
+
+    // ЯВНО сохраняет слой памяти на сервер (action=replace, type=<слой>).
+    function saveMemoryLayer(memType, box) {
+        var payload = {
+            action: "replace",
+            type: memType,
+            data: collectMemRows(box),
         };
-
-        fetch("/api/ask_files", {
+        return fetch("/api/memory", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
+            body: JSON.stringify(payload),
         })
-        .then(function (resp) {
-            return resp.json().catch(function () {
-                return { ok: false, error: "Сервер вернул некорректный ответ." };
-            });
-        })
-        .then(function (data) {
-            setStatus("", "");
-            if (!data.ok) {
-                setStatus(data.error || "Не удалось выполнить анализ.", "error");
-                return;
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+            if (d && d.ok) {
+                renderMemory(d.memory);
+                setStatus("Память «" + memType + "» сохранена.", "ok");
+            } else {
+                setStatus("Не удалось сохранить память.", "error");
             }
-            var qLabel = question
-                ? question
-                : "Анализ файлов: " + attachedFiles.map(function (f) { return f.name; }).join(", ");
-            items.push({ role: "user", content: qLabel });
-            items.push({ role: "assistant", content: data.text || "",
-                         html: data.html || "", answers: data.answers || [] });
-            render();
-            addTokenUsage(data.usage);
-            addAnswerUsage(data.answers);
-            applyContextStats(data.context);
-            renderTrace(data.trace, data.meta);
         })
-        .catch(function (err) { setStatus("Ошибка связи: " + err.message, "error"); })
-        .finally(function () {
-            busy = false;
-            if (filesAsk) filesAsk.disabled = false;
-            submit.disabled = false;
-        });
+        .catch(function () { setStatus("Ошибка связи при сохранении памяти.", "error"); });
     }
 
-    if (filesInput) filesInput.addEventListener("change", function () {
-        addFiles(filesInput.files);
-        filesInput.value = "";
-    });
-    if (dirInput) dirInput.addEventListener("change", function () {
-        addFiles(dirInput.files);
-        dirInput.value = "";
-    });
-    if (filesClear) filesClear.addEventListener("click", clearFiles);
-    if (filesAsk) filesAsk.addEventListener("click", askFiles);
-
-    // ------------------------------------------------------------------
-    // Автотест: тема из окна запроса отправляется N раз подряд
-    // ------------------------------------------------------------------
-    // Тема — текст в #question. Каждый запрос идёт как обычный (/api/ask),
-    // пишется в историю и участвует в автосжатии. Ответы показываются в чате.
-    var AUTO_DEFAULT_COUNT = 50;
-    var autoRunning = false;      // идёт ли прогон
-    var autoStopped = false;      // запрошен ли останов
-
-    function autoStop() {
-        if (!autoRunning) return;
-        autoStopped = true;
-        setStatus("Останавливаю автотест после текущего запроса…", "");
-    }
-
-    // Один запрос автотеста; возвращает Promise<{ok, data}>.
-    function autoAskOnce(question) {
-        var body = {
-            question: question,
-            models: selectedModelsPayload(),
-            compact: getCompactPayload(),
-            strategy: getStrategyPayload(),
-        };
-        return fetch("/api/ask", {
+    // ЯВНО очищает слой памяти на сервере.
+    function clearMemoryLayer(memType, box) {
+        return fetch("/api/memory", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
+            body: JSON.stringify({ action: "clear", type: memType }),
         })
-        .then(function (resp) {
-            return resp.json().catch(function () {
-                return { ok: false, error: "Сервер вернул некорректный ответ." };
-            });
-        })
-        .then(function (data) {
-            if (data.ok) {
-                items.push({ role: "user", content: question });
-                items.push({ role: "assistant", content: data.text || "",
-                             html: data.html || "", answers: data.answers || [] });
-                render();
-                addTokenUsage(data.usage);
-                addAnswerUsage(data.answers);
-                applyContextStats(data.context);
-                if (data.facts) renderFacts(data.facts);
-                if (data.branches) renderBranches(data.branches);
-                renderTrace(data.trace, data.meta);
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+            if (d && d.ok) {
+                renderMemory(d.memory);
+                setStatus("Память «" + memType + "» очищена.", "ok");
             }
-            return { ok: !!data.ok, error: data.error || "" };
         })
-        .catch(function (err) {
-            return { ok: false, error: err.message };
+        .catch(function () {});
+    }
+
+    function bindMemoryLayer(memType, box, addBtn, saveBtn, clearBtn) {
+        if (addBtn) addBtn.addEventListener("click", function () {
+            var empty = box.querySelector(".mem-empty");
+            if (empty) empty.remove();
+            box.appendChild(memRow("", ""));
+        });
+        if (saveBtn) saveBtn.addEventListener("click", function () {
+            saveMemoryLayer(memType, box);
+        });
+        if (clearBtn) clearBtn.addEventListener("click", function () {
+            clearMemoryLayer(memType, box);
         });
     }
 
-    function delay(ms) {
-        return new Promise(function (res) { setTimeout(res, ms); });
-    }
-
-    function runAutoTest() {
-        if (busy || autoRunning) return;
-        var theme = qEl.value.trim();
-        if (!theme) { setStatus("Введите тему в окне запроса.", "error"); return; }
-
-        var count = parseInt(autotestCount ? autotestCount.value : AUTO_DEFAULT_COUNT, 10);
-        if (isNaN(count) || count < 1) count = AUTO_DEFAULT_COUNT;
-        if (count > 500) count = 500;
-        if (autotestCount) autotestCount.value = count;
-
-        var delaySec = parseFloat(autotestDelay ? autotestDelay.value : 1);
-        if (isNaN(delaySec) || delaySec < 0) delaySec = 1;
-        if (delaySec > 60) delaySec = 60;
-        if (autotestDelay) autotestDelay.value = delaySec;
-
-        autoRunning = true;
-        autoStopped = false;
-        busy = true;
-        submit.disabled = true;
-        if (filesAsk) filesAsk.disabled = true;
-        if (autotestStart) autotestStart.disabled = true;
-        if (autotestStop) autotestStop.disabled = false;
-        qEl.value = "";
-
-        var done = 0, errors = 0;
-        var total = count;
-
-        function step() {
-            if (autoStopped || done >= total) {
-                finish();
-                return;
-            }
-            setStatus("Автотест: " + (done + 1) + "/" + total +
-                      " · ошибок: " + errors, "");
-            autoAskOnce(theme).then(function (res) {
-                done++;
-                if (!res.ok) errors++;
-                if (autoStopped || done >= total) {
-                    finish();
-                    return;
-                }
-                delay(Math.round(delaySec * 1000)).then(step);
-            });
-        }
-
-        function finish() {
-            autoRunning = false;
-            busy = false;
-            submit.disabled = false;
-            if (filesAsk) filesAsk.disabled = false;
-            if (autotestStart) autotestStart.disabled = false;
-            if (autotestStop) autotestStop.disabled = true;
-            var msg = "Автотест завершён: " + done + "/" + total +
-                      (errors ? (" · ошибок: " + errors) : "");
-            if (autoStopped) msg = "Автотест остановлен: " + done + "/" + total +
-                      (errors ? (" · ошибок: " + errors) : "");
-            setStatus(msg, errors ? "error" : "ok");
-        }
-
-        step();
-    }
-
-    if (autotestStart) autotestStart.addEventListener("click", runAutoTest);
-    if (autotestStop) autotestStop.addEventListener("click", autoStop);
+    bindMemoryLayer("working",
+        document.getElementById("mem-working-box"),
+        document.getElementById("mem-working-add"),
+        document.getElementById("mem-working-save"),
+        document.getElementById("mem-working-clear"));
+    bindMemoryLayer("longterm",
+        document.getElementById("mem-longterm-box"),
+        document.getElementById("mem-longterm-add"),
+        document.getElementById("mem-longterm-save"),
+        document.getElementById("mem-longterm-clear"));
 
     // ------------------------------------------------------------------
     // Отправка запроса
@@ -1017,6 +874,7 @@
             applyContextStats(data.context);
             if (data.facts) renderFacts(data.facts);
             if (data.branches) renderBranches(data.branches);
+            if (data.memory) renderMemory(data.memory);
             renderTrace(data.trace, data.meta);
         })
         .catch(function (err) { setStatus("Ошибка связи: " + err.message, "error"); })
@@ -1059,6 +917,7 @@
                     applyStrategyFromServer(d.strategy);
                     renderFacts(d.facts);
                     renderBranches(d.branches);
+                    renderMemory(d.memory);
                     // накапливаем статистику токенов из сохранённой истории
                     tokIn = 0;
                     tokOut = 0;
@@ -1133,12 +992,59 @@
     renderModelStats();
     renderModelsTitle();
     resetContextStats();
-    renderFiles();
     // Показываем панели facts/веток согласно активной стратегии.
     syncStrategyUI();
     renderFacts({});
     renderBranches({ branches: [{ name: "main", size: 0 }], active_branch: 0 });
+    renderMemory({ short: { items: 0, branches: 1 },
+                   working: {}, longterm: {} });
 
     // Загружаем историю с сервера (если она есть на диске).
+    // ------------------------------------------------------------------
+    // Левая колонка: автоподгонка ширины под содержимое
+    // ------------------------------------------------------------------
+    // Панель слева сама подстраивается под самый широкий элемент (заголовки,
+    // подписи, строки памяти и т.п.) в разумных пределах CSS (min/max-width).
+    // Ширину задаём через inline-style, измеряя фактическую ширину контента.
+    (function autoFitSide() {
+        var side = document.querySelector(".side");
+        if (!side) return;
+        var MIN = 180, MAX = 380;
+
+        function measure() {
+            var widest = MIN;
+            // Перебираем детей панели и берём максимум их natural-ширины.
+            var kids = side.children;
+            for (var i = 0; i < kids.length; i++) {
+                var el = kids[i];
+                // Временно переводим в режим «по содержимому», чтобы измерить.
+                var prevWidth = el.style.width;
+                var prevWhite = el.style.whiteSpace;
+                el.style.width = "max-content";
+                el.style.whiteSpace = "nowrap";
+                var w = el.scrollWidth;
+                el.style.width = prevWidth;
+                el.style.whiteSpace = prevWhite;
+                if (w > widest) widest = w;
+            }
+            // + внутренние отступы панели (слева/справа) и небольшой запас.
+            var cs = window.getComputedStyle(side);
+            var pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+            var target = Math.ceil(widest + pad + 4);
+            if (target < MIN) target = MIN;
+            if (target > MAX) target = MAX;
+            side.style.width = target + "px";
+        }
+
+        measure();
+        // Пересчитываем при изменении размера окна и после загрузки сессии
+        // (когда в панель могли добавиться новые строки памяти/веток).
+        window.addEventListener("resize", measure);
+        window.addEventListener("load", measure);
+        // Небольшая задержка — учесть данные, подтянутые с сервера.
+        setTimeout(measure, 300);
+        setTimeout(measure, 1000);
+    })();
+
     loadSession();
 })();

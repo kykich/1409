@@ -53,41 +53,38 @@
             </label>
             <span class="side-note">ранняя история → summary, последние N — полностью; 0 — сжатие выключено</span>
 
-            <!-- Файлы/папки для анализа исходников или текста -->
-            <div class="side-title side-sub">Файлы для анализа</div>
-            <div class="files-bar">
-                <label class="files-pick">
-                    <input type="file" id="files-input" multiple hidden>
-                    <span class="btn-side link files-btn">Выбрать файлы</span>
-                </label>
-                <label class="files-pick">
-                    <input type="file" id="dir-input" webkitdirectory directory multiple hidden>
-                    <span class="btn-side link files-btn">Папка</span>
-                </label>
-            </div>
-            <ul id="files-list" class="files-list"></ul>
-            <div class="files-actions">
-                <button id="files-clear" type="button" class="btn-side link">Очистить</button>
-                <button id="files-ask" type="button" class="btn-side">Анализ файлов</button>
+            <!-- Память агента: три типа, хранятся и редактируются РАЗДЕЛЬНО.
+                 1) краткосрочная — текущий диалог (только чтение, автоматически);
+                 2) рабочая — данные текущей задачи (правим вручную);
+                 3) долговременная — профиль/решения/знания (правим вручную). -->
+            <div class="side-title side-sub">Память агента</div>
+
+            <div class="mem-block mem-short">
+                <div class="mem-head">Краткосрочная</div>
+                <div class="mem-tag">диалог · авто</div>
+                <div id="mem-short-info" class="mem-info">диалог пуст</div>
             </div>
 
-            <!-- Автоматический тест: тема из окна запроса отправляется 50 раз -->
-            <div class="side-title side-sub">Автотест</div>
-            <div class="autotest-bar">
-                <label class="autotest-count">
-                    <span>повторов</span>
-                    <input type="number" id="autotest-count" class="gen-input" min="1" max="500" step="1" value="50">
-                </label>
-                <label class="autotest-delay">
-                    <span>пауза, с</span>
-                    <input type="number" id="autotest-delay" class="gen-input" min="0" max="60" step="0.5" value="1">
-                </label>
+            <div class="mem-block mem-working">
+                <div class="mem-head">Рабочая</div>
+                <div class="mem-tag">текущая задача</div>
+                <div id="mem-working-box" class="mem-rows"></div>
+                <div class="mem-actions">
+                    <button id="mem-working-add" type="button" class="btn-side link">+ строка</button>
+                    <button id="mem-working-save" type="button" class="btn-side">Сохранить</button>
+                    <button id="mem-working-clear" type="button" class="btn-side link">Очистить</button>
+                </div>
             </div>
-            <div class="files-actions">
-                <button id="autotest-start" type="button" class="btn-side"
-                        title="Тема — текст в окне запроса. Он отправится подряд заданное число раз (как обычные запросы, с записью в историю).">
-                    Автотест</button>
-                <button id="autotest-stop" type="button" class="btn-side link" disabled>Стоп</button>
+
+            <div class="mem-block mem-longterm">
+                <div class="mem-head">Долговременная</div>
+                <div class="mem-tag">профиль · решения</div>
+                <div id="mem-longterm-box" class="mem-rows"></div>
+                <div class="mem-actions">
+                    <button id="mem-longterm-add" type="button" class="btn-side link">+ строка</button>
+                    <button id="mem-longterm-save" type="button" class="btn-side">Сохранить</button>
+                    <button id="mem-longterm-clear" type="button" class="btn-side link">Очистить</button>
+                </div>
             </div>
 
             <button id="newchat" type="button" class="btn-side link"
@@ -125,11 +122,11 @@
                         <i class="sw sw-hist"></i>История&nbsp;<b id="ts-hist">0</b>
                         <span class="tstat-pct" id="ts-hist-pct">(0%)</span>
                     </div>
-                    <div class="tstat-line" title="Сколько сообщений истории покрыто summary (автосжатие)">
-                        <i class="sw sw-compact"></i>Сжато&nbsp;<b id="ts-compacted">0</b>
+                    <div class="tstat-line" title="Сколько фрагментов ответа взято из рабочей памяти (счётчик за сессию)">
+                        <i class="sw sw-working"></i><span class="mem-name-working">Рабочая</span>:&nbsp;<b id="ts-compacted">0</b>
                     </div>
-                    <div class="tstat-line" title="Сколько сообщений в запросе заменено summary (вытеснено из контекста)">
-                        <i class="sw sw-fromsum"></i>Из summary&nbsp;<b id="ts-from-summary">0</b>
+                    <div class="tstat-line" title="Сколько фрагментов ответа взято из долговременной памяти (счётчик за сессию)">
+                        <i class="sw sw-longterm"></i><span class="mem-name-longterm">Долговременная</span>:&nbsp;<b id="ts-from-summary">0</b>
                     </div>
                 </div>
 

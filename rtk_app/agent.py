@@ -161,7 +161,7 @@ class Agent:
         return chosen
 
     def answer(self, question, history=None, selected=None, max_tokens=None,
-               compact=None):
+               compact=None, memory=None):
         """Обрабатывает запрос пользователя и возвращает результат.
 
         Принимает:
@@ -175,6 +175,10 @@ class Agent:
                         (модель сама выбирает лимит вывода);
             compact — dict {enabled, keep, summary} или None — настройки
                       сжатия истории.
+            memory  — dict {"working": {...}, "longterm": {...}} или None:
+                      данные памяти агента; фрагменты ответа, совпадающие с
+                      ними, подсвечиваются цветом (рабочая — фисташковым,
+                      долговременная — фуксией).
         Возвращает dict, единообразный для успеха и ошибок:
             ok      — True, если хотя бы одна модель ответила;
             text    — текстовое представление ответов;
@@ -237,6 +241,8 @@ class Agent:
         ok_any = False
         input_total = 0
         output_total = 0
+        # Сколько фрагментов ответа заимствовано из памяти (по всем моделям).
+        memory_used = {"working": 0, "longterm": 0}
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         mt = self._coerce_max_tokens(max_tokens)
@@ -266,7 +272,11 @@ class Agent:
             output_total += single["completion_tokens"]
             if single["ok"]:
                 ok_any = True
-            blocks.append(self._render_block(provider, model, label, cls, single))
+            block_html, mem_counts = self._render_block(
+                provider, model, label, cls, single, memory)
+            blocks.append(block_html)
+            memory_used["working"] += mem_counts["working"]
+            memory_used["longterm"] += mem_counts["longterm"]
             text_parts.append(self._render_text(provider, model, label, single))
             collected.append({
                 "label": label,
@@ -300,39 +310,7 @@ class Agent:
         }
         return Ok(self).value(ok=ok_any, html=html, text=text,
                               answers=collected, meta=meta, trace=trace,
-                              usage=usage)
-
-    def answer_files(self, files, question="", selected=None, max_tokens=None):
-        """Анализирует приложенные файлы (исходники/текст) через выбранные модели.
-
-        files — список dict {name, path, content}: содержимое уже прочитано
-        в браузере и передано как текст. Историю диалога не подмешиваем —
-        анализ разовый. Возвращает результат того же формата, что и answer().
-        """
-        files = [f for f in (files or []) if isinstance(f, dict)]
-        chunks = []
-        total_chars = 0
-        for f in files:
-            content = f.get("content")
-            content = content if isinstance(content, str) else str(content or "")
-            name = f.get("path") or f.get("name") or "файл"
-            total_chars += len(content)
-            chunks.append("### Файл: %s\n```\n%s\n```" % (name, content))
-
-        instr = str(question or "").strip()
-        if not instr:
-            instr = ("Проанализируй приложенные исходники/текст: объясни, "
-                     "что делает код (или о чём текст), отметь структуру, "
-                     "назначение ключевых частей и возможные проблемы.")
-        prompt = ("Проанализируй приложенные файлы.\n\n"
-                  "Задача: %s\n\n"
-                  "Приложено файлов: %d (суммарно %d символов).\n\n%s"
-                  % (instr, len(files), total_chars, "\n\n".join(chunks)))
-
-        # Разовый анализ: без истории диалога.
-        result = self.answer(prompt, history=[], selected=selected,
-                             max_tokens=max_tokens)
-        return result
+                              usage=usage, memory_used=memory_used)
 
     # ---- приватная логика запроса (инкапсулирована в агенте) ----
 
@@ -439,49 +417,43 @@ class Agent:
                 "error": str(exc),
             }
 
-    def _render_block(self, provider, model, label, cls, single):
-        """HTML-блок (карточка ответа одной модели)."""
+    def _render_block(self, provider, model, label, cls, single, memory=None):
+        """HTML-блок (карточка ответа одной модели) и счётчики памяти.
+
+        В заголовке карточки показываем ТОЛЬКО название модели — время,
+        токены и стоимость в шапке ответа не выводим (метрики остаются в
+        текстовом представлении и статистике сессии).
+
+        Фрагменты ответа, совпадающие с данными памяти агента (memory),
+        подсвечиваются: рабочая — фисташковым, долговременная — фуксией.
+        Возвращает кортеж (html, counts), где counts = {"working": N,
+        "longterm": M} — сколько фрагментов заимствовано из каждой памяти.
+        """
         content = single["content"]
+        counts = {"working": 0, "longterm": 0}
         try:
-            frag = html_report.text_to_html_paragraphs(content)
+            frag, counts = html_report.render_with_memory_counts(
+                content, memory=memory)
         except Exception:
             frag = html_report.escape_html(content)
 
-        metrics = []
-        metrics.append("время: %.2f c" % single["elapsed"])
-        metrics.append("токены: ввод %d / вывод %d"
-                       % (single["prompt_tokens"], single["completion_tokens"]))
-        if provider == "deepseek":
-            in_price = config.DS_PRICE_INPUT_PER_M.get(model, 0.0)
-            out_price = config.DS_PRICE_OUTPUT_PER_M.get(model, 0.0)
-            cost = (single["prompt_tokens"] * in_price
-                    + single["completion_tokens"] * out_price) / 1_000_000.0
-            metrics.append("стоимость: ≈ ¥%.6f" % cost)
-        metrics_html = "".join("<span>%s</span>" % m for m in metrics)
-
-        return (
+        block = (
             "<div class='variant variant-%s'>"
             "<div class='variant-head'>"
             "<span class='variant-name'>%s</span>"
-            "<div class='variant-metrics'>%s</div>"
             "</div>"
             "<div class='variant-body'>%s</div></div>"
-            % (cls, label, metrics_html, frag)
+            % (cls, label, frag)
         )
+        return block, counts
 
     def _render_text(self, provider, model, label, single):
-        """Текстовая строка-представление ответа одной модели."""
-        cost = ""
-        if provider == "deepseek":
-            in_price = config.DS_PRICE_INPUT_PER_M.get(model, 0.0)
-            out_price = config.DS_PRICE_OUTPUT_PER_M.get(model, 0.0)
-            c = (single["prompt_tokens"] * in_price
-                 + single["completion_tokens"] * out_price) / 1_000_000.0
-            cost = ", ¥%.6f" % c
-        return ("%s (%s): [%.2f c · %d/%d tok%s]\n%s"
-                % (label, model, single["elapsed"],
-                   single["prompt_tokens"], single["completion_tokens"],
-                   cost, single["content"]))
+        """Текстовая строка-представление ответа одной модели.
+
+        Показываем ТОЛЬКО название модели и её ответ — без времени, токенов
+        и стоимости (метрики остаются в статистике сессии и служебных логах).
+        """
+        return "%s:\n%s" % (label, single["content"])
 
     def _build_meta(self, ts, total_tokens, ok_any):
         """Служебная строка с информацией о генерации."""
