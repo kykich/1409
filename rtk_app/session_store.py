@@ -24,8 +24,22 @@ session/session.json. При запуске сервера хранилище п
   "branches": [ {           // ветки диалога (стратегия Branch)
       "name": "main",
       "messages": [ … ]     // собственные сообщения ветки
-  } ]
+  } ],
+  "memory": {               // ПАМЯТЬ АГЕНТА — три типа, хранятся ОТДЕЛЬНО
+      "working":  {"ключ": "значение", …},   // рабочая: текущая задача/шаги
+      "longterm": {"ключ": "значение", …}    // долговременная: профиль/решения
+  }
 }
+
+Память агента — ТРИ независимых типа (задание A), которые хранятся РАЗДЕЛЬНО
+(задание B1) и заполняются ЯВНО, с выбором «что и куда» (задание B2):
+  * "short"    — краткосрочная: срез текущего диалога (messages / активная
+                 ветка). Заполняется автоматически каждым ходом; в JSON-поле
+                 memory НЕ дублируется, т.к. короткая память = сам диалог;
+  * "working"  — рабочая: key-value данные ТЕКУЩЕЙ ЗАДАЧИ (активная задача,
+                 подцели, шаги, статус). Пишется явно через set_memory();
+  * "longterm" — долговременная: key-value профиль пользователя, принятые
+                 решения и знания. Пишется явно через set_memory().
 
 Элемент диалога (один ход):
   - пользователь: {"role": "user",  "content": "текст вопроса"}
@@ -61,6 +75,15 @@ class SessionStore:
         # Ветки диалога (стратегия Branch). По умолчанию одна основная ветка.
         self.branches = [{"name": "main", "messages": []}]
         self.active_branch = 0
+        # ПАМЯТЬ АГЕНТА: два ЯВНО заполняемых key-value слоя — рабочая
+        # (данные текущей задачи) и долговременная (профиль/решения/знания).
+        # Краткосрочная память = self.messages (диалог), поэтому отдельно
+        # НЕ хранится — это и есть разделение типов (задание B1).
+        self.memory_working = {}
+        self.memory_longterm = {}
+        # СЧЁТЧИКИ ИСПОЛЬЗОВАНИЯ памяти: сколько фрагментов ответов моделей
+        # было заимствовано из рабочей/долговременной памяти (сумма за сессию).
+        self.memory_use = {"working": 0, "longterm": 0}
         self.load()
 
     @staticmethod
@@ -83,6 +106,9 @@ class SessionStore:
             self.facts = {}
             self.branches = [{"name": "main", "messages": []}]
             self.active_branch = 0
+            self.memory_working = {}
+            self.memory_longterm = {}
+            self.memory_use = {"working": 0, "longterm": 0}
             if not self.path or not os.path.isfile(self.path):
                 return
             try:
@@ -124,6 +150,28 @@ class SessionStore:
                 facts = data.get("facts")
                 if isinstance(facts, dict):
                     self.facts = {str(k): str(v) for k, v in facts.items()}
+                # Память агента: рабочая и долговременная (key-value).
+                # Читаем ЯВНО из отдельного блока memory — типы не смешиваются.
+                memory = data.get("memory")
+                if isinstance(memory, dict):
+                    working = memory.get("working")
+                    if isinstance(working, dict):
+                        self.memory_working = {str(k): str(v)
+                                               for k, v in working.items()}
+                    longterm = memory.get("longterm")
+                    if isinstance(longterm, dict):
+                        self.memory_longterm = {str(k): str(v)
+                                                for k, v in longterm.items()}
+                # Счётчики использования памяти (за сессию).
+                mused = data.get("memory_use")
+                if isinstance(mused, dict):
+                    try:
+                        self.memory_use["working"] = max(
+                            0, int(mused.get("working", 0) or 0))
+                        self.memory_use["longterm"] = max(
+                            0, int(mused.get("longterm", 0) or 0))
+                    except (TypeError, ValueError):
+                        self.memory_use = {"working": 0, "longterm": 0}
                 # Ветки диалога (стратегия Branch).
                 branches = data.get("branches")
                 if isinstance(branches, list) and branches:
@@ -168,6 +216,7 @@ class SessionStore:
                 "branches": [{"name": b["name"], "messages": list(b["messages"])}
                              for b in self.branches],
                 "active_branch": self.active_branch,
+                "memory": self.memory_state(),
             }
 
     def has_history(self):
@@ -209,6 +258,13 @@ class SessionStore:
             "facts": self.facts,
             "branches": self.branches,
             "active_branch": self.active_branch,
+            # Память агента: два ЯВНО заполняемых слоя (типы хранятся отдельно).
+            "memory": {
+                "working": self.memory_working,
+                "longterm": self.memory_longterm,
+            },
+            # Счётчики использования данных памяти (сумма за сессию).
+            "memory_use": dict(self.memory_use),
         }
         tmp = self.path + ".tmp"
         try:
@@ -220,14 +276,23 @@ class SessionStore:
 
     # ---- сброс ----
     def reset(self):
-        """Очищает сессию: начинает новый разговор с чистого листа."""
+        """Очищает сессию: начинает новый разговор с чистого листа.
+
+        Краткосрочную память (диалог) и РАБОЧУЮ память текущей задачи чистим —
+        они относятся к завершаемому разговору. ДОЛГОВРЕМЕННУЮ память
+        (профиль/решения/знания) СОХРАНЯЕМ: она переносится между сессиями.
+        """
         with self.lock:
             self.messages = []
             self.compact = self._default_compact()
             self.facts = {}
             self.branches = [{"name": "main", "messages": []}]
             self.active_branch = 0
-            # Стратегию (strategy/window) НЕ сбрасываем — это выбор пользователя.
+            # Рабочая память завершённой задачи больше не нужна.
+            self.memory_working = {}
+            # Счётчики использования памяти — обнуляем для нового разговора.
+            self.memory_use = {"working": 0, "longterm": 0}
+            # Стратегию (strategy/window) и долговременную память НЕ сбрасываем.
             self._save_locked()
 
     # ---- Настройки сжатия ----
@@ -322,6 +387,15 @@ class SessionStore:
                 "facts_count": len(self.facts),
                 "branches": len(self.branches),
                 "active_branch": self.active_branch,
+                # Сколько элементов РАБОЧЕЙ и ДОЛГОВРЕМЕННОЙ памяти реально
+                # уходит в запрос (используется в интерфейсе для подсветки:
+                # Рабочая — фисташковый, Долговременная — фуксия).
+                "working_count": len(self.memory_working),
+                "longterm_count": len(self.memory_longterm),
+                # СЧЁТЧИКИ ИСПОЛЬЗОВАНИЯ данных памяти (за сессию): сколько
+                # фрагментов ответов моделей заимствовано из каждой памяти.
+                "memory_used_working": int(self.memory_use.get("working", 0)),
+                "memory_used_longterm": int(self.memory_use.get("longterm", 0)),
             }
 
     def head_to_compact(self):
@@ -430,6 +504,11 @@ class SessionStore:
                 base = list(self.messages)
             else:
                 base = list(self.messages)
+            # Память агента: рабочая + долговременная подмешиваются как
+            # системное сообщение (краткосрочная = сам диалог `base`).
+            mem_msg = self.memory_message()
+            if mem_msg:
+                base = [mem_msg] + base
             # Сжатие summary — поверх выбранной стратегией истории.
             return self._apply_summary_over(base)
 
@@ -451,6 +530,214 @@ class SessionStore:
         for k, v in self.facts.items():
             lines.append("- %s: %s" % (k, v))
         return {"role": "system", "content": "\n".join(lines)}
+
+    # ---- Память агента: краткосрочная / рабочая / долговременная ----
+    #
+    # Три типа памяти (задание A) хранятся РАЗДЕЛЬНО (задание B1):
+    #   * "short"    — краткосрочная: сам текущий диалог (messages/ветки),
+    #                  заполняется автоматически; отдельного поля не имеет;
+    #   * "working"  — рабочая: key-value текущей задачи (memory_working);
+    #   * "longterm" — долговременная: key-value профиль/решения/знания
+    #                  (memory_longterm).
+    # Запись в working/longterm — только ЯВНАЯ, с указанием типа (задание B2):
+    # вызывающий код сам решает, в какой слой сохранить каждый ключ.
+
+    def add_memory_usage(self, working=0, longterm=0):
+        """Добавляет к счётчикам использования памяти число фрагментов.
+
+        working/longterm — сколько фрагментов ответа заимствовано из
+        соответствующей памяти в этом обмене. Возвращает обновлённые счётчики.
+        """
+        with self.lock:
+            try:
+                self.memory_use["working"] += max(0, int(working or 0))
+                self.memory_use["longterm"] += max(0, int(longterm or 0))
+            except (TypeError, ValueError):
+                pass
+            self._save_locked()
+            return dict(self.memory_use)
+
+    def memory_state(self):
+        """Снимок всех трёх типов памяти (для интерфейса/отладки).
+
+        Возвращает dict:
+          short    — {items: N} краткая сводка краткосрочной памяти (диалога);
+          working  — копия рабочей памяти (key-value);
+          longterm — копия долговременной памяти (key-value).
+        """
+        with self.lock:
+            return {
+                "short": {
+                    "kind": "диалог",
+                    "items": len(self.messages),
+                    "active_branch": self.active_branch,
+                    "branches": len(self.branches),
+                },
+                "working": dict(self.memory_working),
+                "longterm": dict(self.memory_longterm),
+            }
+
+    def get_memory(self, mem_type):
+        """Возвращает копию памяти указанного типа.
+
+        mem_type: "short" | "working" | "longterm".
+        Для "short" возвращает сводку диалога (память ведётся сообщениями).
+        Для "working"/"longterm" — копию соответствующего key-value словаря.
+        """
+        with self.lock:
+            if mem_type == "short":
+                return {
+                    "kind": "диалог",
+                    "items": len(self.messages),
+                    "active_branch": self.active_branch,
+                    "branches": len(self.branches),
+                }
+            if mem_type == "working":
+                return dict(self.memory_working)
+            if mem_type == "longterm":
+                return dict(self.memory_longterm)
+            return None
+
+    @staticmethod
+    def _clean_memory_dict(data):
+        """Нормализует словарь памяти: строковые ключи/значения, лимиты.
+
+        Возвращает (clean, dropped): clean — очищенный словарь в пределах
+        config.MEMORY_MAX_KEYS, dropped — сколько ключей отброшено по лимиту.
+        Значения обрезаются до config.MEMORY_VALUE_CAP символов.
+        """
+        clean = {}
+        if not isinstance(data, dict):
+            return clean, 0
+        cap = int(config.MEMORY_VALUE_CAP)
+        limit = int(config.MEMORY_MAX_KEYS)
+        keys = list(data.keys())
+        dropped = max(0, len(keys) - limit)
+        for k in keys[:limit]:
+            key = str(k).strip()
+            if not key:
+                continue
+            val = data[k]
+            val = "" if val is None else str(val)
+            if len(val) > cap:
+                val = val[:cap]
+            clean[key] = val
+        return clean, dropped
+
+    def set_memory_key(self, mem_type, key, value):
+        """Явно записывает пару key=value в память указанного типа.
+
+        Возвращает dict записанного элемента либо возбуждает ValueError
+        при неверном типе/пустом ключе.
+        """
+        mem_type = str(mem_type or "").strip()
+        if mem_type not in config.MEMORY_TYPES:
+            raise ValueError(
+                "Неизвестный тип памяти: %r. Допустимо: %s"
+                % (mem_type, ", ".join(config.MEMORY_TYPES)))
+        key = str(key or "").strip()
+        if not key:
+            raise ValueError("Пустой ключ памяти.")
+        val = "" if value is None else str(value)
+        cap = int(config.MEMORY_VALUE_CAP)
+        if len(val) > cap:
+            val = val[:cap]
+        with self.lock:
+            if mem_type == "short":
+                # Краткосрочную память вручную не пишем — это сам диалог.
+                raise ValueError(
+                    "Тип 'short' (текущий диалог) заполняется автоматически "
+                    "и не редактируется через память. Используйте 'working' "
+                    "для задач или 'longterm' для профиля/знаний.")
+            if mem_type == "working":
+                if key not in self.memory_working \
+                        and len(self.memory_working) >= int(config.MEMORY_MAX_KEYS):
+                    # вытесняем самый старый ключ (FIFO), чтобы не расти бесконечно
+                    self.memory_working.pop(next(iter(self.memory_working)))
+                self.memory_working[key] = val
+            else:  # longterm
+                if key not in self.memory_longterm \
+                        and len(self.memory_longterm) >= int(config.MEMORY_MAX_KEYS):
+                    self.memory_longterm.pop(next(iter(self.memory_longterm)))
+                self.memory_longterm[key] = val
+            self._save_locked()
+        return {"type": mem_type, "key": key, "value": val}
+
+    def delete_memory_key(self, mem_type, key):
+        """Явно удаляет ключ из памяти указанного типа. True, если удалён."""
+        mem_type = str(mem_type or "").strip()
+        if mem_type not in config.MEMORY_TYPES:
+            raise ValueError("Неизвестный тип памяти: %r" % (mem_type,))
+        key = str(key or "").strip()
+        if not key:
+            return False
+        with self.lock:
+            if mem_type == "working":
+                existed = self.memory_working.pop(key, None) is not None
+            elif mem_type == "longterm":
+                existed = self.memory_longterm.pop(key, None) is not None
+            else:
+                raise ValueError("Тип 'short' (диалог) не редактируется вручную.")
+            if existed:
+                self._save_locked()
+            return existed
+
+    def set_memory_bulk(self, mem_type, data):
+        """Явно ЗАМЕНЯЕТ память указанного типа целиком словарём data.
+
+        Используется интерфейсом для сохранения отредактированной панели
+        «Рабочая/Долговременная память». Возвращает итоговый словарь.
+        """
+        mem_type = str(mem_type or "").strip()
+        if mem_type not in config.MEMORY_TYPES:
+            raise ValueError("Неизвестный тип памяти: %r" % (mem_type,))
+        if mem_type == "short":
+            raise ValueError("Тип 'short' (диалог) не редактируется вручную.")
+        clean, _dropped = self._clean_memory_dict(data)
+        with self.lock:
+            if mem_type == "working":
+                self.memory_working = clean
+            else:
+                self.memory_longterm = clean
+            self._save_locked()
+            return dict(clean)
+
+    def memory_message(self):
+        """Системное сообщение с памятью для запроса к LLM.
+
+        В контекст добавляются ТОЛЬКО рабочая и долговременная память
+        (краткосрочная и так присутствует как история диалога). Возвращает
+        dict-сообщение или None, если обе памяти пусты.
+
+        Агенту даётся инструкция помечать маркерами фрагменты ответа,
+        опирающиеся на память, чтобы интерфейс подсветил их цветом:
+          * [[R]]…[[/R]] — данные из РАБОЧЕЙ памяти (фисташковый);
+          * [[L]]…[[/L]] — данные из ДОЛГОВРЕМЕННОЙ памяти (фуксия).
+        """
+        with self.lock:
+            lines = []
+            if self.memory_working:
+                lines.append("Рабочая память (данные текущей задачи):")
+                for k, v in self.memory_working.items():
+                    lines.append("- %s: %s" % (k, v))
+            if self.memory_longterm:
+                if lines:
+                    lines.append("")
+                lines.append("Долговременная память (профиль, решения, знания):")
+                for k, v in self.memory_longterm.items():
+                    lines.append("- %s: %s" % (k, v))
+            if not lines:
+                return None
+            lines.append("")
+            lines.append("Правило разметки ответа: если фрагмент ответа "
+                         "основан на данных из ПАМЯТИ, оберни именно этот "
+                         "фрагмент маркерами:")
+            lines.append("- из рабочей памяти — [[R]]…[[/R]];")
+            lines.append("- из долговременной памяти — [[L]]…[[/L]].")
+            lines.append("Маркеры ставь только вокруг заимствованных из памяти "
+                         "слов/фраз; остальной текст — без маркеров.")
+            return {"role": "system",
+                    "content": "Память агента:\n" + "\n".join(lines)}
 
     # ---- Facts (key-value память) ----
 
