@@ -733,8 +733,20 @@
     var memWorkingBox = document.getElementById("mem-working-box");
     var memLongtermBox = document.getElementById("mem-longterm-box");
 
+    // «Грязные» слои памяти: пользователь изменил строки, но ещё не сохранил.
+    // Фоновые обновления (после ответа/загрузки сессии) НЕ должны затирать
+    // такие правки — иначе введённое в одном слое терялось бы при
+    // сохранении/обновлении другого слоя. Ключ — тип слоя, значение — bool.
+    var memDirty = { working: false, longterm: false };
+
+    // Помечает слой «грязным» при любом ручном вводе.
+    function markMemDirty(memType) {
+        if (memType in memDirty) memDirty[memType] = true;
+    }
+
     // Рисует строки key=value для редактируемого слоя памяти.
-    function memRow(key, valValDiv) {
+    // memType нужен, чтобы отмечать слой «грязным» при ручном редактировании.
+    function memRow(key, valValDiv, memType) {
         var row = document.createElement("div");
         row.className = "mem-row";
         var k = document.createElement("input");
@@ -743,16 +755,23 @@
         var v = document.createElement("input");
         v.type = "text"; v.className = "mem-val"; v.value = valValDiv || "";
         v.placeholder = "значение";
+        // Любой ручной ввод в поле/удаление строки — слоя касались, значит
+        // его нельзя затирать фоновым обновлением из снимка сервера.
+        k.addEventListener("input", function () { markMemDirty(memType); });
+        v.addEventListener("input", function () { markMemDirty(memType); });
         var del = document.createElement("button");
         del.type = "button"; del.className = "mem-del"; del.textContent = "\u00d7";
         del.title = "Удалить строку";
-        del.addEventListener("click", function () { row.remove(); });
+        del.addEventListener("click", function () {
+            markMemDirty(memType);
+            row.remove();
+        });
         row.appendChild(k); row.appendChild(v); row.appendChild(del);
         return row;
     }
 
     // Отрисовка редактируемого слоя памяти из словаря.
-    function renderMemRows(box, data) {
+    function renderMemRows(box, data, memType) {
         if (!box) return;
         box.innerHTML = "";
         var keys = data ? Object.keys(data) : [];
@@ -763,7 +782,7 @@
             box.appendChild(empty);
             return;
         }
-        keys.forEach(function (k) { box.appendChild(memRow(k, data[k])); });
+        keys.forEach(function (k) { box.appendChild(memRow(k, data[k], memType)); });
     }
 
     // Собирает словарь из строк редактируемого слоя.
@@ -779,8 +798,15 @@
         return out;
     }
 
-    // Полная отрисовка всех трёх слоёв из снимка памяти сервера.
-    function renderMemory(mem) {
+    // Отрисовка слоёв памяти из снимка сервера.
+    //
+    // onlyType — если задан ("working"/"longterm"), перерисовываем ТОЛЬКО
+    // этот слой (например, после его сохранения), не трогая другой: тогда
+    // несохранённые правки в другом слое сохраняются.
+    // force — если true, перерисовать и «грязные» слои (используется только
+    // при явном сохранении/очистке и принудительной синхронизации).
+    // По умолчанию «грязные» слои НЕ перерисовываются фоновыми обновлениями.
+    function renderMemory(mem, onlyType, force) {
         if (!mem) return;
         // 1) краткосрочная — только информация о диалоге.
         if (memShortInfo) {
@@ -789,16 +815,27 @@
                 " · веток: " + (s.branches || 1);
         }
         // Связываем факты с их слоем памяти (для select в панели «Факты»).
-        factsMemory = {};
-        Object.keys(mem.working || {}).forEach(function (k) {
-            factsMemory[k] = "working";
-        });
-        Object.keys(mem.longterm || {}).forEach(function (k) {
-            factsMemory[k] = "longterm";
-        });
+        // Обновляем карту только по тем слоям, которые сейчас синхронизируем.
+        if (!onlyType) factsMemory = {};
+        if (!onlyType) {
+            Object.keys(mem.working || {}).forEach(function (k) {
+                factsMemory[k] = "working";
+            });
+            Object.keys(mem.longterm || {}).forEach(function (k) {
+                factsMemory[k] = "longterm";
+            });
+        }
         // 2) рабочая и 3) долговременная — редактируемые.
-        renderMemRows(memWorkingBox, mem.working || {});
-        renderMemRows(memLongtermBox, mem.longterm || {});
+        var wantWorking = (!onlyType || onlyType === "working");
+        var wantLongterm = (!onlyType || onlyType === "longterm");
+        if (wantWorking && (force || !memDirty.working)) {
+            renderMemRows(memWorkingBox, mem.working || {}, "working");
+            memDirty.working = false;
+        }
+        if (wantLongterm && (force || !memDirty.longterm)) {
+            renderMemRows(memLongtermBox, mem.longterm || {}, "longterm");
+            memDirty.longterm = false;
+        }
     }
 
     // ЯВНО сохраняет слой памяти на сервер (action=replace, type=<слой>).
@@ -816,7 +853,9 @@
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (d) {
             if (d && d.ok) {
-                renderMemory(d.memory);
+                // Перерисовываем ТОЛЬКО сохранённый слой: несохранённые
+                // правки в другом слое остаются нетронутыми.
+                renderMemory(d.memory, memType, true);
                 setStatus("Память «" + memType + "» сохранена.", "ok");
             } else {
                 setStatus("Не удалось сохранить память.", "error");
@@ -835,7 +874,8 @@
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (d) {
             if (d && d.ok) {
-                renderMemory(d.memory);
+                // Очищаем и перерисовываем только этот слой.
+                renderMemory(d.memory, memType, true);
                 setStatus("Память «" + memType + "» очищена.", "ok");
             }
         })
@@ -846,7 +886,8 @@
         if (addBtn) addBtn.addEventListener("click", function () {
             var empty = box.querySelector(".mem-empty");
             if (empty) empty.remove();
-            box.appendChild(memRow("", ""));
+            markMemDirty(memType);
+            box.appendChild(memRow("", "", memType));
         });
         if (saveBtn) saveBtn.addEventListener("click", function () {
             saveMemoryLayer(memType, box);
