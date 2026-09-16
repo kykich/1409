@@ -836,8 +836,19 @@ body { font-family: 'Segoe UI', Arial, sans-serif; color: var(--text); overflow:
     color: #223;
     min-width: 0;
 }
-.fact-row .fact-key { flex: 0 0 34%; font-weight: 700; }
+.fact-row .fact-key { flex: 0 0 30%; font-weight: 700; }
 .fact-row .fact-val { flex: 1 1 auto; }
+.fact-row .fact-mem {
+    flex: 0 0 auto;
+    font: inherit;
+    font-size: .68rem;
+    padding: 3px 4px;
+    border: 1px solid #cdd4e6;
+    border-radius: 5px;
+    background: #fff;
+    color: #223;
+    max-width: 120px;
+}
 .fact-row .fact-del {
     flex: 0 0 auto;
     border: none;

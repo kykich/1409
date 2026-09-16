@@ -69,26 +69,36 @@ def main():
     check("Sliding N=0 -> вся история", len(s2.get_context_messages()) == 16)
 
     print()
-    print("=== Требование 3: Sticky Facts (key-value) ===")
+    print("=== Требование 3: Facts = данные ПАМЯТИ агента ===")
     s3, path3 = make_store()
     add_turns(s3, 6)                         # 12 сообщений
+    # Факты хранятся в памяти агента: по умолчанию set_facts кладёт их
+    # в РАБОЧУЮ память (longterm не трогаем).
     s3.set_facts({"цель": "написать отчёт", "ограничение": "до пятницы"})
     s3.set_strategy("facts", 4)
     ctx3 = s3.get_context_messages()
-    check("Facts: первый блок — system с фактами",
+    check("Facts: первый блок — system с памятью (фактами)",
           ctx3 and ctx3[0].get("role") == "system"
           and "цель" in ctx3[0].get("content", "")
           and "написать отчёт" in ctx3[0].get("content", ""))
     body3 = [m for m in ctx3 if m.get("role") != "system"]
-    check("Facts: facts + последние N сообщений (4)", len(body3) == 4)
+    check("Facts: память + последние N сообщений (4)", len(body3) == 4)
     s3.set_strategy("facts", 0)
     ctx3b = s3.get_context_messages()
     body3b = [m for m in ctx3b if m.get("role") != "system"]
-    check("Facts N=0 -> facts + вся история", len(body3b) == 12)
+    check("Facts N=0 -> память + вся история", len(body3b) == 12)
     check("Facts редактируются (set/get)",
           s3.set_facts({"x": "1", "y": "2"}) == {"x": "1", "y": "2"})
-    check("Facts сохраняются в JSON (поле facts)",
-          json.load(open(path3, encoding="utf-8")).get("facts") == {"x": "1", "y": "2"})
+    check("Facts сохраняются как память (поле memory.working)",
+          json.load(open(path3, encoding="utf-8")).get("memory", {})
+              .get("working") == {"x": "1", "y": "2"})
+    # Выбор памяти у значения факта: раскладка по слоям.
+    s3.set_memory_bulk("working", {"задача": "отчёт"})
+    s3.set_memory_bulk("longterm", {"профиль": "аналитик"})
+    check("факты объединяют рабочую и долговременную память",
+          s3.get_facts() == {"задача": "отчёт", "профиль": "аналитик"})
+    check("карта памяти фактов: ключ -> слой",
+          s3.facts_memory_map() == {"задача": "working", "профиль": "longterm"})
 
     print()
     print("=== Требование 4: Branching (ветки) ===")

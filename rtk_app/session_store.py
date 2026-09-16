@@ -70,8 +70,8 @@ class SessionStore:
         # Стратегия управления контекстом.
         self.strategy = config.STRATEGY
         self.window = int(config.STRATEGY_WINDOW)
-        # Key-value память (стратегия Facts).
-        self.facts = {}
+        # Факты (стратегия Facts) — НЕ отдельное хранилище: они живут в памяти
+        # агента (memory_working / memory_longterm). Отдельного self.facts нет.
         # Ветки диалога (стратегия Branch). По умолчанию одна основная ветка.
         self.branches = [{"name": "main", "messages": []}]
         self.active_branch = 0
@@ -103,7 +103,6 @@ class SessionStore:
             self.compact = self._default_compact()
             self.strategy = config.STRATEGY
             self.window = int(config.STRATEGY_WINDOW)
-            self.facts = {}
             self.branches = [{"name": "main", "messages": []}]
             self.active_branch = 0
             self.memory_working = {}
@@ -146,10 +145,14 @@ class SessionStore:
                     self.window = int(config.STRATEGY_WINDOW)
                 if self.window < 0:
                     self.window = 0
-                # Facts (key-value память).
-                facts = data.get("facts")
-                if isinstance(facts, dict):
-                    self.facts = {str(k): str(v) for k, v in facts.items()}
+                # Facts (key-value память) — устаревшее поле для совместимости.
+                # Загружаем их ТОЛЬКО если отдельная память пуста (миграция
+                # старых файлов: факты переезжают в рабочую память).
+                legacy_facts = data.get("facts")
+                if isinstance(legacy_facts, dict):
+                    legacy_facts = {str(k): str(v) for k, v in legacy_facts.items()}
+                else:
+                    legacy_facts = {}
                 # Память агента: рабочая и долговременная (key-value).
                 # Читаем ЯВНО из отдельного блока memory — типы не смешиваются.
                 memory = data.get("memory")
@@ -162,6 +165,11 @@ class SessionStore:
                     if isinstance(longterm, dict):
                         self.memory_longterm = {str(k): str(v)
                                                 for k, v in longterm.items()}
+                # Миграция: старые файлы хранили факты отдельно — переносим в
+                # рабочую память, если её нет.
+                if legacy_facts and not self.memory_working \
+                        and not self.memory_longterm:
+                    self.memory_working = dict(legacy_facts)
                 # Счётчики использования памяти (за сессию).
                 mused = data.get("memory_use")
                 if isinstance(mused, dict):
@@ -212,7 +220,7 @@ class SessionStore:
                 "compact": dict(self.compact),
                 "strategy": self.strategy,
                 "window": self.window,
-                "facts": dict(self.facts),
+                "facts": self.get_facts(),
                 "branches": [{"name": b["name"], "messages": list(b["messages"])}
                              for b in self.branches],
                 "active_branch": self.active_branch,
@@ -255,7 +263,7 @@ class SessionStore:
             "compact": self.compact,
             "strategy": self.strategy,
             "window": self.window,
-            "facts": self.facts,
+            "facts": self.get_facts(),
             "branches": self.branches,
             "active_branch": self.active_branch,
             # Память агента: два ЯВНО заполняемых слоя (типы хранятся отдельно).
@@ -285,7 +293,6 @@ class SessionStore:
         with self.lock:
             self.messages = []
             self.compact = self._default_compact()
-            self.facts = {}
             self.branches = [{"name": "main", "messages": []}]
             self.active_branch = 0
             # Рабочая память завершённой задачи больше не нужна.
@@ -384,7 +391,7 @@ class SessionStore:
                 "summary_len": len(self.compact["summary"]) if has_summary else 0,
                 "strategy": self.strategy,
                 "window": max(0, self.window),
-                "facts_count": len(self.facts),
+                "facts_count": len(self.memory_working) + len(self.memory_longterm),
                 "branches": len(self.branches),
                 "active_branch": self.active_branch,
                 # Сколько элементов РАБОЧЕЙ и ДОЛГОВРЕМЕННОЙ памяти реально
@@ -495,10 +502,11 @@ class SessionStore:
                 # Sliding Window: только последние N сообщений (N=0 — вся история).
                 base = list(self.messages[-window:]) if window > 0 else list(self.messages)
             elif strategy == "facts":
-                # Facts: блок facts (key-value) + последние N сообщений.
+                # Facts: факты хранятся в ПАМЯТИ агента (рабочая +
+                # долговременная), поэтому отдельный блок facts не нужен —
+                # они попадут в контекст через memory_message() ниже.
                 recent = list(self.messages[-window:]) if window > 0 else list(self.messages)
-                fact_msg = self._facts_message()
-                base = ([fact_msg] if fact_msg else []) + recent
+                base = recent
             elif strategy == "branch":
                 # Ветки работают поверх активной истории (она уже = активная ветка).
                 base = list(self.messages)
@@ -523,11 +531,16 @@ class SessionStore:
         return [{"role": "system", "content": self.compact["summary"]}] + recent
 
     def _facts_message(self):
-        """Формирует системное сообщение с блоком facts (key-value)."""
-        if not self.facts:
+        """(Устарело) Блок facts формируется памятью агента.
+
+        Оставлено для обратной совместимости: собирает сообщение из фактов
+        (объединения рабочей и долговременной памяти).
+        """
+        facts = self.get_facts()
+        if not facts:
             return None
         lines = ["Известные факты о диалоге (key: value):"]
-        for k, v in self.facts.items():
+        for k, v in facts.items():
             lines.append("- %s: %s" % (k, v))
         return {"role": "system", "content": "\n".join(lines)}
 
@@ -740,19 +753,50 @@ class SessionStore:
                     "content": "Память агента:\n" + "\n".join(lines)}
 
     # ---- Facts (key-value память) ----
+    #
+    # ВАЖНО: «факты» (стратегия Facts) — это НЕ отдельное хранилище, а
+    # ДАННЫЕ ПАМЯТИ агента. Каждый факт хранится в одном из слоёв памяти —
+    # рабочей (memory_working) или долговременной (memory_longterm) — по
+    # выбору пользователя. Поэтому get_facts() возвращает объединение обоих
+    # слоёв, а set_facts() кладёт факты в рабочую память.
 
     def set_facts(self, facts):
-        """Заменяет блок facts целиком (словарь) и сохраняет."""
+        """Заменяет факты: раскладывает их в рабочую память.
+
+        Используется для авто-обновления фактов агентом. Ключи, которые уже
+        лежат в ДОЛГОВРЕМЕННОЙ памяти, НЕ трогаем — так сохраняется выбор
+        пользователя, сделанный в панели «Факты» (в какую память попадёт факт).
+        """
         with self.lock:
             if isinstance(facts, dict):
-                self.facts = {str(k): str(v) for k, v in facts.items()}
+                incoming = {str(k): str(v) for k, v in facts.items()}
+                # Не затираем долговременную память: её ключи сохраняются.
+                working = {k: v for k, v in incoming.items()
+                           if k not in self.memory_longterm}
+                self.memory_working = working
             self._save_locked()
-            return dict(self.facts)
+            return self.get_facts()
 
     def get_facts(self):
-        """Копия текущего блока facts."""
+        """Факты = объединение рабочей и долговременной памяти (key-value).
+
+        Ключи рабочей памяти идут первыми, затем — долговременной.
+        """
         with self.lock:
-            return dict(self.facts)
+            merged = {}
+            merged.update(self.memory_working)
+            merged.update(self.memory_longterm)
+            return merged
+
+    def facts_memory_map(self):
+        """Соответствие ключ-факт -> слой памяти ("working"|"longterm")."""
+        with self.lock:
+            out = {}
+            for k in self.memory_working:
+                out[k] = "working"
+            for k in self.memory_longterm:
+                out[k] = "longterm"
+            return out
 
     # ---- Ветки диалога (Branching) ----
 

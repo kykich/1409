@@ -367,15 +367,39 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_facts(self):
-        """Просмотр/редактирование блока facts (key-value)."""
+        """Просмотр/редактирование фактов (key-value) стратегии Facts.
+
+        Факты — это данные ПАМЯТИ агента: каждый факт раскладывается в
+        ВЫБРАННЫЙ пользователем слой памяти: mem_map = {ключ: "working"|
+        "longterm"}. Ключи без явного выбора считаются рабочей памятью.
+        Отдельного хранилища facts нет — читать/писать их можно через память.
+        """
         data = self._read_json_body()
         if not data:
             return self._send_json(400, {"ok": False, "error": "Bad JSON."})
-        if "facts" in data and isinstance(data.get("facts"), dict):
-            self.session.set_facts(data.get("facts"))
+        facts = data.get("facts")
+        if isinstance(facts, dict):
+            facts = {str(k): str(v) for k, v in facts.items()}
+            mem_map = data.get("mem_map")
+            if not isinstance(mem_map, dict):
+                mem_map = {}
+            # Раскладываем факты по слоям памяти согласно выбору у значения.
+            working, longterm = {}, {}
+            for k, v in facts.items():
+                layer = str(mem_map.get(k, "working")).strip().lower()
+                if layer == "longterm":
+                    longterm[k] = v
+                else:
+                    working[k] = v
+            try:
+                self.session.set_memory_bulk("working", working)
+                self.session.set_memory_bulk("longterm", longterm)
+            except ValueError as exc:
+                return self._send_json(400, {"ok": False, "error": str(exc)})
         return self._send_json(200, {
             "ok": True,
             "facts": self.session.get_facts(),
+            "memory": self.session.memory_state(),
         })
 
     def _handle_memory(self):

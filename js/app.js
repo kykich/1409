@@ -348,6 +348,13 @@
     }
 
     // ---- Факты (key-value), стратегия Facts ----
+    // Каждый факт хранится в одном из слоёв ПАМЯТИ агента, выбор — у значения:
+    //   "working"  — Рабочая память (данные текущей задачи);
+    //   "longterm" — Долговременная память (профиль/решения/знания).
+    // Память по фактам приходит из снимка памяти сервера (mem.working /
+    // mem.longterm); ключ, найденный в слое, показывает этот слой в select.
+    var factsMemory = {};   // {ключ: "working"|"longterm"} — текущий выбор
+
     function renderFacts(facts) {
         if (!factsBox) return;
         factsBox.innerHTML = "";
@@ -359,7 +366,7 @@
             factsBox.appendChild(empty);
         } else {
             keys.forEach(function (k) {
-                factsBox.appendChild(factRow(k, facts[k]));
+                factsBox.appendChild(factRow(k, facts[k], factsMemory[k] || "working"));
             });
         }
         var actions = document.createElement("div");
@@ -368,7 +375,7 @@
         add.type = "button";
         add.textContent = "+ факт";
         add.addEventListener("click", function () {
-            factsBox.insertBefore(factRow("", ""), actions);
+            factsBox.insertBefore(factRow("", "", "working"), actions);
         });
         var save = document.createElement("button");
         save.type = "button";
@@ -380,7 +387,7 @@
         factsBox.appendChild(actions);
     }
 
-    function factRow(key, val) {
+    function factRow(key, val, memType) {
         var row = document.createElement("div");
         row.className = "fact-row";
         var k = document.createElement("input");
@@ -389,30 +396,54 @@
         var v = document.createElement("input");
         v.type = "text"; v.className = "fact-val"; v.value = val || "";
         v.placeholder = "значение";
+        // Выбор памяти, в которую попадёт значение: Рабочая / Долгосрочная.
+        var mem = document.createElement("select");
+        mem.className = "fact-mem";
+        mem.title = "В какую память попадёт факт";
+        [
+            { value: "working", text: "Рабочая" },
+            { value: "longterm", text: "Долговременная" }
+        ].forEach(function (opt) {
+            var o = document.createElement("option");
+            o.value = opt.value;
+            o.textContent = opt.text;
+            mem.appendChild(o);
+        });
+        mem.value = (memType === "longterm") ? "longterm" : "working";
         var del = document.createElement("button");
         del.type = "button"; del.className = "fact-del"; del.textContent = "\u00d7";
         del.title = "Удалить факт";
         del.addEventListener("click", function () { row.remove(); });
-        row.appendChild(k); row.appendChild(v); row.appendChild(del);
+        row.appendChild(k); row.appendChild(v); row.appendChild(mem); row.appendChild(del);
         return row;
     }
 
     function saveFacts() {
         if (!factsBox) return;
         var out = {};
+        var memMap = {};
         var rows = factsBox.querySelectorAll(".fact-row");
         for (var i = 0; i < rows.length; i++) {
             var k = rows[i].querySelector(".fact-key").value.trim();
             var v = rows[i].querySelector(".fact-val").value.trim();
-            if (k) out[k] = v;
+            var memSel = rows[i].querySelector(".fact-mem");
+            if (k) {
+                out[k] = v;
+                memMap[k] = memSel && memSel.value === "longterm" ? "longterm" : "working";
+            }
         }
         fetch("/api/facts", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ facts: out }),
+            body: JSON.stringify({ facts: out, mem_map: memMap }),
         })
         .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) { if (d && d.ok) renderFacts(d.facts); })
+        .then(function (d) {
+            if (!d || !d.ok) return;
+            factsMemory = memMap;
+            renderFacts(d.facts);
+            if (d.memory) renderMemory(d.memory);
+        })
         .catch(function () {});
     }
 
@@ -757,6 +788,14 @@
             memShortInfo.textContent = "сообщений в диалоге: " + (s.items || 0) +
                 " · веток: " + (s.branches || 1);
         }
+        // Связываем факты с их слоем памяти (для select в панели «Факты»).
+        factsMemory = {};
+        Object.keys(mem.working || {}).forEach(function (k) {
+            factsMemory[k] = "working";
+        });
+        Object.keys(mem.longterm || {}).forEach(function (k) {
+            factsMemory[k] = "longterm";
+        });
         // 2) рабочая и 3) долговременная — редактируемые.
         renderMemRows(memWorkingBox, mem.working || {});
         renderMemRows(memLongtermBox, mem.longterm || {});
@@ -872,9 +911,9 @@
             addTokenUsage(data.usage);
             addAnswerUsage(data.answers);
             applyContextStats(data.context);
+            if (data.memory) renderMemory(data.memory);
             if (data.facts) renderFacts(data.facts);
             if (data.branches) renderBranches(data.branches);
-            if (data.memory) renderMemory(data.memory);
             renderTrace(data.trace, data.meta);
         })
         .catch(function (err) { setStatus("Ошибка связи: " + err.message, "error"); })
@@ -915,9 +954,9 @@
                     // Применяем настройки сжатия и стратегии с сервера
                     applyCompactFromServer(d.compact);
                     applyStrategyFromServer(d.strategy);
+                    renderMemory(d.memory);
                     renderFacts(d.facts);
                     renderBranches(d.branches);
-                    renderMemory(d.memory);
                     // накапливаем статистику токенов из сохранённой истории
                     tokIn = 0;
                     tokOut = 0;
@@ -998,7 +1037,6 @@
     renderBranches({ branches: [{ name: "main", size: 0 }], active_branch: 0 });
     renderMemory({ short: { items: 0, branches: 1 },
                    working: {}, longterm: {} });
-
     // Загружаем историю с сервера (если она есть на диске).
     // ------------------------------------------------------------------
     // Левая колонка: автоподгонка ширины под содержимое
