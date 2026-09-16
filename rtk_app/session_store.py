@@ -84,6 +84,8 @@ class SessionStore:
         # СЧЁТЧИКИ ИСПОЛЬЗОВАНИЯ памяти: сколько фрагментов ответов моделей
         # было заимствовано из рабочей/долговременной памяти (сумма за сессию).
         self.memory_use = {"working": 0, "longterm": 0}
+        # Сколько РАЗ (за сколько обменов) каждый вид памяти был задействован.
+        self.memory_use_count = {"working": 0, "longterm": 0}
         self.load()
 
     @staticmethod
@@ -108,6 +110,7 @@ class SessionStore:
             self.memory_working = {}
             self.memory_longterm = {}
             self.memory_use = {"working": 0, "longterm": 0}
+            self.memory_use_count = {"working": 0, "longterm": 0}
             if not self.path or not os.path.isfile(self.path):
                 return
             try:
@@ -180,6 +183,16 @@ class SessionStore:
                             0, int(mused.get("longterm", 0) or 0))
                     except (TypeError, ValueError):
                         self.memory_use = {"working": 0, "longterm": 0}
+                # Сколько РАЗ вид памяти был задействован (за сессию).
+                mcount = data.get("memory_use_count")
+                if isinstance(mcount, dict):
+                    try:
+                        self.memory_use_count["working"] = max(
+                            0, int(mcount.get("working", 0) or 0))
+                        self.memory_use_count["longterm"] = max(
+                            0, int(mcount.get("longterm", 0) or 0))
+                    except (TypeError, ValueError):
+                        self.memory_use_count = {"working": 0, "longterm": 0}
                 # Ветки диалога (стратегия Branch).
                 branches = data.get("branches")
                 if isinstance(branches, list) and branches:
@@ -273,6 +286,8 @@ class SessionStore:
             },
             # Счётчики использования данных памяти (сумма за сессию).
             "memory_use": dict(self.memory_use),
+            # Сколько РАЗ вид памяти был задействован (за сессию).
+            "memory_use_count": dict(self.memory_use_count),
         }
         tmp = self.path + ".tmp"
         try:
@@ -299,6 +314,7 @@ class SessionStore:
             self.memory_working = {}
             # Счётчики использования памяти — обнуляем для нового разговора.
             self.memory_use = {"working": 0, "longterm": 0}
+            self.memory_use_count = {"working": 0, "longterm": 0}
             # Стратегию (strategy/window) и долговременную память НЕ сбрасываем.
             self._save_locked()
 
@@ -403,6 +419,11 @@ class SessionStore:
                 # фрагментов ответов моделей заимствовано из каждой памяти.
                 "memory_used_working": int(self.memory_use.get("working", 0)),
                 "memory_used_longterm": int(self.memory_use.get("longterm", 0)),
+                # Сколько РАЗ (за сколько ответов) каждый вид памяти пригодился.
+                "memory_use_count_working": int(
+                    self.memory_use_count.get("working", 0)),
+                "memory_use_count_longterm": int(
+                    self.memory_use_count.get("longterm", 0)),
             }
 
     def head_to_compact(self):
@@ -556,19 +577,33 @@ class SessionStore:
     # вызывающий код сам решает, в какой слой сохранить каждый ключ.
 
     def add_memory_usage(self, working=0, longterm=0):
-        """Добавляет к счётчикам использования памяти число фрагментов.
+        """Учитывает использование памяти за один обмен (запрос/ответ).
 
         working/longterm — сколько фрагментов ответа заимствовано из
-        соответствующей памяти в этом обмене. Возвращает обновлённые счётчики.
+        соответствующей памяти в этом обмене. Из них формируем:
+          * memory_use       — СУММА фрагментов за сессию (для подсветки);
+          * memory_use_count — сколько РАЗ вид памяти был задействован
+                               (считаем +1 за обмен, если из памяти взяли
+                               хотя бы один фрагмент). Это и есть «количество
+                               раз использования вида памяти».
+        Возвращает обновлённые счётчики.
         """
         with self.lock:
             try:
-                self.memory_use["working"] += max(0, int(working or 0))
-                self.memory_use["longterm"] += max(0, int(longterm or 0))
+                w = max(0, int(working or 0))
+                l = max(0, int(longterm or 0))
             except (TypeError, ValueError):
-                pass
+                w = l = 0
+            self.memory_use["working"] += w
+            self.memory_use["longterm"] += l
+            # +1 «раз использования» за обмен, если память реально пригодилась.
+            if w > 0:
+                self.memory_use_count["working"] += 1
+            if l > 0:
+                self.memory_use_count["longterm"] += 1
             self._save_locked()
-            return dict(self.memory_use)
+            return {"fragments": dict(self.memory_use),
+                    "counts": dict(self.memory_use_count)}
 
     def memory_state(self):
         """Снимок всех трёх типов памяти (для интерфейса/отладки).
@@ -761,21 +796,48 @@ class SessionStore:
     # слоёв, а set_facts() кладёт факты в рабочую память.
 
     def set_facts(self, facts):
-        """Заменяет факты: раскладывает их в рабочую память.
+        """ДОПОЛНЯЕТ рабочую память фактами (не перезаписывает её).
 
-        Используется для авто-обновления фактов агентом. Ключи, которые уже
-        лежат в ДОЛГОВРЕМЕННОЙ памяти, НЕ трогаем — так сохраняется выбор
-        пользователя, сделанный в панели «Факты» (в какую память попадёт факт).
+        Используется для авто-обновления фактов агентом после каждого хода.
+        ВАЖНО: рабочая память НЕ очищается после каждого запроса — новые/
+        изменённые факты ДОПОЛНЯЮТ уже накопленные данные, а прежние ключи
+        сохраняются, если модель их не вернула. Ключи, лежащие в
+        ДОЛГОВРЕМЕННОЙ памяти, не трогаем (сохраняем выбор пользователя).
         """
         with self.lock:
             if isinstance(facts, dict):
-                incoming = {str(k): str(v) for k, v in facts.items()}
-                # Не затираем долговременную память: её ключи сохраняются.
-                working = {k: v for k, v in incoming.items()
-                           if k not in self.memory_longterm}
-                self.memory_working = working
+                # Дополняем рабочую память: существующие ключи не удаляем,
+                # при совпадении — обновляем значение.
+                for k, v in facts.items():
+                    key = str(k)
+                    if key not in self.memory_longterm:
+                        self.memory_working[key] = str(v)
             self._save_locked()
             return self.get_facts()
+
+    def merge_memory(self, mem_type, data):
+        """ДОПОЛНЯЕТ память указанного типа словарём data (merge, не replace).
+
+        Существующие ключи сохраняются; совпадающие — обновляются значением
+        из data. Используется, чтобы данные памяти накапливались, а не
+        терялись при каждом обновлении. Возвращает итоговый словарь слоя.
+        """
+        mem_type = str(mem_type or "").strip()
+        if mem_type not in config.MEMORY_TYPES:
+            raise ValueError("Неизвестный тип памяти: %r" % (mem_type,))
+        if mem_type == "short":
+            raise ValueError("Тип 'short' (диалог) не редактируется вручную.")
+        clean, _dropped = self._clean_memory_dict(data)
+        with self.lock:
+            target = self.memory_working if mem_type == "working" \
+                else self.memory_longterm
+            for k, v in clean.items():
+                # При переполнении вытесняем самый старый ключ (FIFO).
+                if k not in target and len(target) >= int(config.MEMORY_MAX_KEYS):
+                    target.pop(next(iter(target)))
+                target[k] = v
+            self._save_locked()
+            return dict(target)
 
     def get_facts(self):
         """Факты = объединение рабочей и долговременной памяти (key-value).

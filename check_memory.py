@@ -105,6 +105,54 @@ def test_memory_in_prompt():
     print("[OK] память подмешивается в контекст запроса (working+longterm)")
 
 
+def test_facts_merge_not_wipe():
+    """Факты ДОПОЛНЯЮТ рабочую память, а не стирают её после запроса."""
+    st, _ = _fresh_store()
+    st.set_memory_key("working", "пользователь", "Иван")
+    # Авто-обновление фактов приносит новый ключ — прежний должен остаться.
+    st.set_facts({"цель": "отчёт"})
+    w = st.get_memory("working")
+    assert w.get("пользователь") == "Иван", w
+    assert w.get("цель") == "отчёт", w
+    # Дополнение через merge тоже сохраняет прежние ключи.
+    st.merge_memory("working", {"шаг": "собрать данные"})
+    w2 = st.get_memory("working")
+    assert w2.get("пользователь") == "Иван" and w2.get("цель") == "отчёт" \
+        and w2.get("шаг") == "собрать данные", w2
+    print("[OK] факты ДОПОЛНЯЮТ рабочую память (без очистки)")
+
+
+def test_memory_usage_counts():
+    """Счётчик «раз использования» вида памяти растёт за обмены с памятью."""
+    st, _ = _fresh_store()
+    # Обмен 1: задействованы обе памяти.
+    st.add_memory_usage(working=2, longterm=1)
+    # Обмен 2: только рабочая.
+    st.add_memory_usage(working=3, longterm=0)
+    # Обмен 3: память не использовалась.
+    st.add_memory_usage(working=0, longterm=0)
+    ctx = st.context_stats()
+    # Рабочая: 2 обмена с ненулевым использованием -> count = 2.
+    assert ctx["memory_use_count_working"] == 2, ctx
+    # Долговременная: 1 обмен -> count = 1.
+    assert ctx["memory_use_count_longterm"] == 1, ctx
+    # Фрагменты суммируются отдельно: рабочая 2+3=5, долговременная 1.
+    assert ctx["memory_used_working"] == 5, ctx
+    assert ctx["memory_used_longterm"] == 1, ctx
+    print("[OK] счётчик «раз использования» памяти учитывается за обмены")
+
+
+def test_usage_counts_persist_and_reset():
+    st, tmpdir = _fresh_store()
+    path = os.path.join(tmpdir, "session.json")
+    st.add_memory_usage(working=1, longterm=0)
+    st2 = SessionStore(path=path)
+    assert st2.context_stats()["memory_use_count_working"] == 1
+    st2.reset()
+    assert st2.context_stats()["memory_use_count_working"] == 0
+    print("[OK] счётчики использования сохраняются и сбрасываются")
+
+
 if __name__ == "__main__":
     test_three_types_are_separate()
     test_short_is_not_manually_writable()
@@ -112,4 +160,7 @@ if __name__ == "__main__":
     test_persistence_roundtrip()
     test_reset_keeps_longterm()
     test_memory_in_prompt()
+    test_facts_merge_not_wipe()
+    test_memory_usage_counts()
+    test_usage_counts_persist_and_reset()
     print("\nВСЕ ПРОВЕРКИ ПАМЯТИ ПРОЙДЕНЫ.")

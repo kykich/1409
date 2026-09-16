@@ -87,11 +87,15 @@ def main():
     ctx3b = s3.get_context_messages()
     body3b = [m for m in ctx3b if m.get("role") != "system"]
     check("Facts N=0 -> память + вся история", len(body3b) == 12)
-    check("Facts редактируются (set/get)",
-          s3.set_facts({"x": "1", "y": "2"}) == {"x": "1", "y": "2"})
-    check("Facts сохраняются как память (поле memory.working)",
+    check("Facts дополняются (merge: прежние ключи сохраняются)",
+          s3.set_facts({"x": "1", "y": "2"}) ==
+              {"цель": "написать отчёт", "ограничение": "до пятницы",
+               "x": "1", "y": "2"})
+    check("Facts сохраняются как память (поле memory.working, дополнение)",
           json.load(open(path3, encoding="utf-8")).get("memory", {})
-              .get("working") == {"x": "1", "y": "2"})
+              .get("working") == {"цель": "написать отчёт",
+                                  "ограничение": "до пятницы",
+                                  "x": "1", "y": "2"})
     # Выбор памяти у значения факта: раскладка по слоям.
     s3.set_memory_bulk("working", {"задача": "отчёт"})
     s3.set_memory_bulk("longterm", {"профиль": "аналитик"})

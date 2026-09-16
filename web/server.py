@@ -245,10 +245,25 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         # (sliding / facts / branch) и, поверх неё, сжатие summary.
         history = self.session.get_context_messages()
 
+        # ПРОВЕРКА НАЛИЧИЯ данных в памяти при формировании запроса:
+        # если в рабочей/долговременной памяти есть данные — они уже
+        # подмешаны в контекст (memory_message) как системное сообщение.
+        memory = self.session.memory_state()
+        mem_items = (len(memory.get("working") or {})
+                     + len(memory.get("longterm") or {}))
+        if mem_items:
+            print("[MEMORY] в запрос добавлена память: рабочая=%d, "
+                  "долговременная=%d (всего %d элементов)"
+                  % (len(memory.get("working") or {}),
+                     len(memory.get("longterm") or {}), mem_items),
+                  flush=True)
+        else:
+            print("[MEMORY] память пуста — в запрос не добавляется", flush=True)
+
         result = self.agent.answer(question, history, selected,
                                    max_tokens=max_tokens,
                                    compact=compact,
-                                   memory=self.session.memory_state())
+                                   memory=memory)
         if result.get("ok"):
             # По одному ходу на ответ модели с уже готовой разметкой
             self.session.append_turn(question, {

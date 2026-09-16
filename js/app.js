@@ -637,13 +637,13 @@
         }
     }
 
-    // Счётчики использования памяти в заголовке: сколько фрагментов ответов
-    // было заимствовано из РАБОЧЕЙ (фисташковая) и ДОЛГОВРЕМЕННОЙ (фуксия)
-    // памяти за сессию (накопительно).
+    // Счётчики использования памяти в заголовке: сколько РАЗ данные были
+    // заимствованы из РАБОЧЕЙ (фисташковая) и ДОЛГОВРЕМЕННОЙ (фуксия) памяти
+    // за сессию (накопительно). «Раз» = за сколько ответов память пригодилась.
     function applyContextStats(ctx) {
         if (!ctx) return;
-        if (tsCompacted) tsCompacted.textContent = fmt(parseInt(ctx.memory_used_working, 10) || 0);
-        if (tsFromSummary) tsFromSummary.textContent = fmt(parseInt(ctx.memory_used_longterm, 10) || 0);
+        if (tsCompacted) tsCompacted.textContent = fmt(parseInt(ctx.memory_use_count_working, 10) || 0);
+        if (tsFromSummary) tsFromSummary.textContent = fmt(parseInt(ctx.memory_use_count_longterm, 10) || 0);
     }
 
     function resetContextStats() {
