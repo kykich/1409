@@ -526,7 +526,12 @@ def create_server(agent, host=None, port=None):
     if agent is None:
         raise ValueError("create_server: требуется экземпляр агента (Agent).")
     _set_agent(agent)
-    addr = (host or config.WEB_HOST, port or config.WEB_PORT)
+    # ВАЖНО: проверяем именно None, а не «ложность»: port=0 — валидное
+    # значение (ОС сама выберет свободный порт), которое нельзя подменять
+    # значением по умолчанию, иначе тесты/инстансы будут конфликтовать
+    # на общем порту config.WEB_PORT.
+    addr = (host or config.WEB_HOST,
+            config.WEB_PORT if port is None else port)
     return ThreadingHTTPServer(addr, WebRequestHandler)
 
 

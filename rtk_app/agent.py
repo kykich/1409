@@ -335,15 +335,34 @@ class Agent:
         return [summary_msg] + recent
 
     def _build_messages(self, history, question):
-        """Собирает полный список сообщений для API (системный промпт + диалог)."""
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        """Собирает полный список сообщений для API (системный промпт + диалог).
+
+        ВАЖНО: из истории сохраняются НЕ только user/assistant, но и
+        SYSTEM-сообщения (память агента и summary сжатия). Раньше они
+        отбрасывались, из-за чего модель НЕ получала память (рабочую и
+        долговременную) и summary — будто памяти не существует.
+
+        Все системные сообщения (промпт агента + память + summary)
+        ОБЪЕДИНЯЮТСЯ в ОДНО ведущее system-сообщение: не все провайдеры
+        корректно принимают несколько system-сообщений, а GigaChat ожидает
+        системную инструкцию в начале. Диалог (user/assistant) идёт далее
+        в исходном порядке, затем — текущий вопрос пользователя.
+        """
+        system_parts = [SYSTEM_PROMPT]
+        dialog = []
         if isinstance(history, list):
             for m in history:
                 if (isinstance(m, dict)
-                        and m.get("role") in ("user", "assistant")
                         and isinstance(m.get("content"), str)
                         and m["content"]):
-                    messages.append({"role": m["role"], "content": m["content"]})
+                    role = m.get("role")
+                    if role == "system":
+                        # Память агента и summary — в общую системную часть.
+                        system_parts.append(m["content"])
+                    elif role in ("user", "assistant"):
+                        dialog.append({"role": role, "content": m["content"]})
+        messages = [{"role": "system", "content": "\n\n".join(system_parts)}]
+        messages.extend(dialog)
         messages.append({"role": "user", "content": question})
         return messages
 
